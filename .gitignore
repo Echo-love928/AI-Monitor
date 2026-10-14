@@ -1,0 +1,21 @@
+node_modules/
+dist/
+dist-server/
+data/
+.env
+.env.*
+!.env.example
+# Local verification records can contain user queries, account status and evidence.
+reports/
+*.log
+# Credentials, local backups and editor state.
+*.pem
+*.key
+*.p12
+*.pfx
+*.sqlite*
+*.db
+*.bak
+*.tmp
+.vscode/
+.idea/

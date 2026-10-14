@@ -1,0 +1,24 @@
+{
+  "name": "signal-ai-monitor", "version": "0.1.0", "private": true, "type": "module",
+  "engines": { "node": ">=24.16.0 <25" },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:api": "tsx server/index.ts",
+    "worker": "tsx server/worker.ts",
+    "check": "tsc --noEmit",
+    "build": "npm run check && vite build && tsc -p tsconfig.server.json",
+    "start": "node scripts/start.mjs",
+    "test": "tsx --test tests/*.test.ts",
+    "smoke": "tsx scripts/smoke.ts"
+  },
+  "dependencies": {
+    "cheerio": "1.2.0", "dotenv": "18.0.7", "express": "5.3.0", "fast-xml-parser": "5.11.2",
+    "ipaddr.js": "2.5.0", "lucide-react": "1.56.0", "nodemailer": "10.1.0", "react": "19.3.0",
+    "react-dom": "19.3.0", "tsx": "4.23.15", "undici": "8.11.2", "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.6", "@types/node": "24.19.2", "@types/nodemailer": "8.0.2",
+    "@types/react": "19.3.0", "@types/react-dom": "19.3.0", "@vitejs/plugin-react": "6.1.2",
+    "typescript": "7.0.2", "vite": "8.3.4"
+  }
+}
