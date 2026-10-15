@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none" role="img" aria-labelledby="title">
+  <title id="title">FirstCue</title>
+  <path d="M7 20C7 12.268 13.268 6 21 6H49C46.9 14.2 40.9 20 33 20H7Z" fill="#CF4820"/>
+  <path d="M7 33C7 27.477 11.477 25 17 25H38C40.209 25 42 26.791 42 29V33C42 37.418 38.418 41 34 41H22V56H11C8.791 56 7 54.209 7 52V33Z" fill="#CF4820"/>
+  <rect x="53" y="2" width="10" height="10" rx="2" fill="#F3B565"/>
+</svg>

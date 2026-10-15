@@ -25,5 +25,5 @@ async function tick() {
   finally { busy = false; }
 }
 const timer = setInterval(() => void tick(), 2000); const beat = setInterval(heartbeat, 10000);
-void tick(); console.log('SIGNAL worker: 30 分钟监控周期，持久化任务已恢复');
+void tick(); console.log('FirstCue worker: 30 分钟监控周期，持久化任务已恢复');
 for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => { clearInterval(timer); clearInterval(beat); store.release('worker', owner); process.exit(0); });

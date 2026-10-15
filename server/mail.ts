@@ -23,14 +23,14 @@ export class Mailer {
   transport: MailTransport;
   constructor(public store: Store, transport?: MailTransport) { this.transport = transport || nodemailer.createTransport({ host: config.smtpHost, port: config.smtpPort, secure: config.smtpSecure, requireTLS: !config.smtpSecure, auth: { user: config.smtpUser, pass: config.smtpPass }, connectionTimeout: 15000, greetingTimeout: 15000, socketTimeout: 20000 }); }
   async verify(): Promise<void> { if (!mailConfigured()) throw new Error('SMTP 未配置，请填写 .env 后重启'); await this.transport.verify(); }
-  async test(): Promise<void> { await this.verify(); const recipient = this.store.settings().recipient; if (!recipient) throw new Error('请先填写接收邮箱'); const response = await this.transport.sendMail({ from: config.smtpFrom, to: recipient, subject: '[SIGNAL] 邮件通知测试', text: '这是一封 SIGNAL 测试邮件。收到它后，邮件通知链路可以进行验收。' }); if (!response.accepted.length || response.rejected?.length) throw new Error('SMTP 未接受测试邮件的收件人'); }
+  async test(): Promise<void> { await this.verify(); const recipient = this.store.settings().recipient; if (!recipient) throw new Error('请先填写接收邮箱'); const response = await this.transport.sendMail({ from: config.smtpFrom, to: recipient, subject: '[FirstCue] 邮件通知测试', text: '这是一封 FirstCue 测试邮件。收到它后，邮件通知链路可以进行验收。' }); if (!response.accepted.length || response.rejected?.length) throw new Error('SMTP 未接受测试邮件的收件人'); }
   async flush(now = Date.now(), allowTestTransport = false): Promise<void> {
     if (!mailConfigured() && !allowTestTransport || !this.store.settings().recipient) return;
     for (const job of this.store.list<MailJob>('mail').filter(item => ['pending', 'retry'].includes(item.status) && Date.parse(item.nextAttemptAt) <= now).slice(0, 10)) {
       const rule = this.store.get<Rule>('rules', job.ruleId); const signal = this.store.get<Signal>('events', job.eventId);
       if (!rule || !signal || !eligible(signal, rule)) { this.store.put('mail', job.id, { ...job, status: 'failed', error: '监控已暂停/删除或事件核验状态改变，取消发送' }); continue; }
       const updated = { ...job, recipient: this.store.settings().recipient, attempts: job.attempts + 1, signal };
-      try { const result = await this.transport.sendMail({ from: config.smtpFrom, to: updated.recipient, subject: `[SIGNAL] ${signal.title}`, messageId: updated.messageId, ...mailContent(signal, rule.name) }); if (!result.accepted.length || result.rejected?.length) throw new Error('SMTP 未接受收件人'); this.store.put('mail', job.id, { ...updated, status: 'submitted', submittedAt: new Date(now).toISOString(), error: null }); }
+      try { const result = await this.transport.sendMail({ from: config.smtpFrom, to: updated.recipient, subject: `[FirstCue] ${signal.title}`, messageId: updated.messageId, ...mailContent(signal, rule.name) }); if (!result.accepted.length || result.rejected?.length) throw new Error('SMTP 未接受收件人'); this.store.put('mail', job.id, { ...updated, status: 'submitted', submittedAt: new Date(now).toISOString(), error: null }); }
       catch (error) { this.store.put('mail', job.id, { ...updated, status: updated.attempts >= 4 ? 'failed' : 'retry', nextAttemptAt: new Date(now + 60000 * 2 ** updated.attempts).toISOString(), error: safeError(error) }); }
     }
   }
