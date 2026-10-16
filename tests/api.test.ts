@@ -13,6 +13,7 @@ test('API 管理规则、配置、来源和重复触发；拒绝越界/外站请
     const response = await request('/rules', 'POST', { name: 'API test', query: 'AI coding', kind: 'keyword', enabled: false, notify: true }); assert.equal(response.status, 201); const rule = await response.json() as Rule;
     assert.equal((await request(`/rules/${rule.id}`, 'PATCH', { enabled: true })).status, 200); assert.equal((await request('/scan', 'POST')).status, 202); assert.equal((await request('/scan', 'POST')).status, 200);
     assert.equal((await request('/settings', 'PATCH', { aiDailyLimit: 0 })).status, 400); assert.equal((await request('/settings', 'PATCH', { recipient: 'test@example.com', model: 'test/model' })).status, 200);
+    assert.equal((await request('/settings','PATCH',{lookbackHours:24})).status,400); assert.equal((await request('/settings','PATCH',{lookbackHours:120})).status,200);
     assert.equal((await request('/sources', 'POST', { name: 'Private', url: 'http://127.0.0.1/private' })).status, 400);
     assert.equal((await request('/rules', 'POST', { name: 'External', query: 'test', kind: 'keyword', enabled: true, notify: true }, { Origin: 'https://attacker.example' })).status, 403);
     const hostStatus = await new Promise<number | undefined>((resolve, reject) => { get(`${base}/health`, { headers: { Host: 'attacker.example' } }, response => { response.resume(); resolve(response.statusCode); }).on('error', reject); }); assert.equal(hostStatus, 403);

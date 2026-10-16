@@ -2,7 +2,13 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { config, defaults } from './config.js';
-import type { Settings, Source } from '../shared/types.js';
+import type { Candidate, Settings, Signal, Source } from '../shared/types.js';
+import { applyQuality, bindVideoEvidence, QUALITY_VERSION, reviewHistorical } from './quality.js';
+import { nonTwitterDiscovery } from '../shared/discovery.js';
+import { FRESHNESS_HOURS } from '../shared/freshness.js';
+import { expireContent } from './retention.js';
+import { TWITTER_FILTER_VERSION } from '../shared/twitter.js';
+import { syncTwitterEvents } from './twitter-policy.js';
 export class Store {
   db: DatabaseSync;
   constructor(filename = path.join(config.dataDir, 'signal.sqlite')) {
@@ -32,14 +38,66 @@ export class Store {
         this.put('sources', 'huggingface', { id: 'huggingface', name: 'Hugging Face Blog', kind: 'rss', url: 'https://huggingface.co/blog/feed.xml', enabled: true, official: true });
         this.put('state', 'huggingfaceSourceAdded', true);
       }
+      if (!this.get('state', 'qualitySourcesV1')) {
+        const additions: Source[] = [
+          {id:'baidu',name:'百度网页搜索',kind:'web',url:'https://m.baidu.com/s',enabled:false,official:false},
+          {id:'sogou',name:'搜狗网页搜索',kind:'web',url:'https://www.sogou.com/web',enabled:true,official:false},
+          {id:'brave',name:'Brave Search · 备选',kind:'web',url:'https://search.brave.com/search',enabled:false,official:false},
+          {id:'anthropic',name:'Anthropic News',kind:'rss',format:'page',url:'https://www.anthropic.com/news',enabled:true,official:true},
+          {id:'cursor',name:'Cursor Changelog',kind:'rss',url:'https://cursor.com/changelog/rss.xml',enabled:true,official:true},
+          {id:'vscode',name:'VS Code Updates',kind:'rss',url:'https://code.visualstudio.com/feed.xml',enabled:true,official:true},
+          {id:'qwen',name:'Qwen 官方博客',kind:'rss',format:'page',url:'https://qwenlm.github.io/',enabled:true,official:true},
+          {id:'deepseek',name:'DeepSeek 官方更新',kind:'rss',format:'page',url:'https://api-docs.deepseek.com/',enabled:true,official:true},
+        ];
+        for(const source of additions) if(!this.get('sources',source.id)) this.put('sources',source.id,source);
+        this.put('state','qualitySourcesV1',true);
+      }
+      if (this.get<number>('state','qualityVersion') !== QUALITY_VERSION) {
+        const context=this.list<Candidate>('candidates');
+        for(const item of context) {
+          const value=applyQuality(item,context);
+          this.put('candidates',item.id,{...item,...value,processedHash:value.quality?.decision === 'filtered' ? value.contentHash : null,attempts:0});
+        }
+        for(const signal of this.list<Signal>('events')) { if(!this.get('event-audit-v2',signal.id)) this.put('event-audit-v2',signal.id,signal); this.put('events',signal.id,reviewHistorical(signal,context)); }
+        this.put('state','settings',{...this.settings(),lookbackHours:FRESHNESS_HOURS});
+        this.put('state','qualityVersion',QUALITY_VERSION);
+      }
+      if(this.get<number>('state','twitterFilterVersion')!==TWITTER_FILTER_VERSION) {
+        for(const item of this.list<Candidate>('candidates').filter(item=>item.sourceKind === 'x')) {
+          if(!this.get('twitter-filter-audit-v1',item.id))this.put('twitter-filter-audit-v1',item.id,item);
+          const value=applyQuality(item);this.put('candidates',item.id,{...item,...value,processedHash:value.quality?.decision === 'filtered' ? item.contentHash : item.processedHash});
+        }
+        for(const signal of this.list<Signal>('events').filter(item=>item.evidence.some(ev=>ev.sourceKind === 'x')))if(!this.get('twitter-event-audit-v1',signal.id))this.put('twitter-event-audit-v1',signal.id,signal);
+        syncTwitterEvents(this);this.put('state','twitterFilterVersion',TWITTER_FILTER_VERSION);
+      }
+      if(!this.get('state','multiPlatformDiscoveryV1')) {
+        for(const source of [
+          {id:'bilibili',name:'B站公开视频',kind:'web',format:'bilibili',url:'https://api.bilibili.com/x/web-interface/search/all/v2',enabled:true,official:false},
+          {id:'weibo',name:'微博公开内容',kind:'web',format:'weibo',url:'https://weibo.com/',enabled:true,official:false}
+        ] satisfies Source[])if(!this.get('sources',source.id))this.put('sources',source.id,source);
+        for(const item of this.list<Candidate>('candidates').filter(item=>item.sourceKind==='web')) {
+          if(!this.get('multiplatform-audit-v1',item.id))this.put('multiplatform-audit-v1',item.id,item);
+          const value=applyQuality(item);this.put('candidates',item.id,{...item,...value,...(nonTwitterDiscovery(value)?{processedHash:null,attempts:0}:{})});
+        }
+        this.put('state','multiPlatformDiscoveryV1',true);
+      }
+      if(!this.get('state','videoIntroBindingV1')) {
+        for(const signal of this.list<Signal>('events')) {
+          const evidence=bindVideoEvidence(signal.evidence);
+          if(evidence.length===signal.evidence.length)continue;
+          this.put('video-binding-audit-v1',signal.id,signal);this.put('events',signal.id,{...signal,evidence});
+        }
+        this.put('state','videoIntroBindingV1',true);
+      }
     });
+    expireContent(this);
   }
   get<T>(space: string, id: string): T | null { const row = this.db.prepare('SELECT data FROM objects WHERE space=? AND id=?').get(space, id); return row ? JSON.parse(row.data as string) as T : null; }
   list<T>(space: string): T[] { return this.db.prepare('SELECT data FROM objects WHERE space=? ORDER BY updated DESC').all(space).map(row => JSON.parse(row.data as string) as T); }
   put(space: string, id: string, value: unknown): void { this.db.prepare('INSERT INTO objects VALUES(?,?,?,?) ON CONFLICT(space,id) DO UPDATE SET data=excluded.data,updated=excluded.updated').run(space, id, JSON.stringify(value), Date.now()); }
   remove(space: string, id: string): void { this.db.prepare('DELETE FROM objects WHERE space=? AND id=?').run(space, id); }
   transaction<T>(fn: () => T): T { this.db.exec('BEGIN IMMEDIATE'); try { const value = fn(); this.db.exec('COMMIT'); return value; } catch (error) { this.db.exec('ROLLBACK'); throw error; } }
-  settings(): Settings { return this.get<Settings>('state', 'settings') || { ...defaults }; }
+  settings(): Settings { return {...(this.get<Settings>('state', 'settings') || defaults),lookbackHours:FRESHNESS_HOURS}; }
   day(): string { return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()); }
   usage(): Record<string, number> { return Object.fromEntries(this.db.prepare('SELECT kind,used FROM usage WHERE day=?').all(this.day()).map(row => [row.kind, row.used])); }
   reserve(kind: string, amount: number, limit: number): boolean { return this.transaction(() => { const used = Number(this.db.prepare('SELECT used FROM usage WHERE day=? AND kind=?').get(this.day(), kind)?.used || 0); if (used + amount > limit) return false; this.db.prepare('INSERT INTO usage VALUES(?,?,?) ON CONFLICT(day,kind) DO UPDATE SET used=excluded.used').run(this.day(), kind, used + amount); return true; }); }

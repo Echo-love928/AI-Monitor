@@ -157,7 +157,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .source-tag.web { background: #fff0e5; color: #945f37; }
 .attention { font-size: 10px; color: var(--muted); white-space: nowrap; }
 .attention b { font: 600 15px var(--mono); color: var(--accent); }
-.signal-actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 0 20px; padding: 7px 0; border-top: 1px solid var(--line); }
+.signal-actions { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; margin: 0 20px; padding: 7px 0; border-top: 1px solid var(--line); }
 .signal-actions > span { display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--muted); }
 .signal-actions .text-button { min-height: 36px; font-size: 11px; }
 .signal-actions .text-button > span { display: inline-flex; align-items: center; gap: 6px; }

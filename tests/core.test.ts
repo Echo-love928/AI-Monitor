@@ -12,7 +12,7 @@ const source: Source = { id: 'test-feed', name: 'Test', kind: 'rss', url: 'https
 const now = Date.now(); const date = new Date(now - 60000).toISOString();
 const evidence = (): Evidence => makeEvidence(source, { url: 'https://openai.com/news/test-release', title: 'Test release', text: 'A test-only release announcement with enough original text to exercise evidence validation. This fixture never appears in the app.', publishedAt: date, original: true, official: true });
 const rule = (): Rule => ({ id: 'rule', name: 'Test release', query: 'test release', kind: 'keyword', enabled: true, notify: true, createdAt: new Date(now - 3600000).toISOString(), baselineAt: new Date(now - 3600000).toISOString(), nextRunAt: new Date(now - 1000).toISOString(), lastRunAt: null });
-const analysis = (ev: Evidence) => analysisSchema.parse({ events: [{ title: 'Test release', summary: 'Fixture', entity: 'test-model', version: '1', eventType: 'release', occurredAt: date, status: 'confirmed', reason: 'Fixture original', attention: 80, attentionReason: 'Fixture', tags: ['test'], evidenceIds: [ev.id], ruleIds: ['rule'], existingEventId: null }], excludedEvidenceIds: [] });
+const analysis = (ev: Evidence) => analysisSchema.parse({ events: [{ title: 'Test release', summary: 'Fixture', entity: 'test-model', version: '1', eventType: 'release', occurredAt: date, isNewsworthy:true, isNewEvent:true, status: 'confirmed', reason: 'Fixture original', attention: 80, attentionReason: 'Fixture', tags: ['test'], evidenceIds: [ev.id], ruleIds: ['rule'], existingEventId: null }], excludedEvidenceIds: [] });
 const signal = (): Signal => validateAnalysis(analysis(evidence()), [evidence()], [rule()], [])[0];
 function doc(text: string, url = source.url): HttpDocument { return { status: 200, headers: {}, text, url }; }
 test('公共地址检查拒绝私网、环回、IPv6 映射、凭据和非标准端口', () => {
@@ -76,7 +76,7 @@ test('输出截断不产生事件，但仍记录供应商返回的 token 用量'
 });
 test('重新核实复用候选，不重复调用 X 或网页搜索', async () => {
   const store = new Store(':memory:'); try {
-    store.put('rules', 'rule', rule()); const ev = evidence(); ingest(store, ev);
+    store.put('rules', 'rule', rule()); store.put('sources',source.id,source); const ev = evidence(); ingest(store, ev);
     const http: HttpClient = { request: async () => { throw new Error('must not collect'); } };
     const run = await new Runner(store, new Collector(store, http, '', false), { analyze: async values => ({ signals: validateAnalysis(analysis(values[0]), values, [rule()], []), excludedEvidenceIds: [] }) }).scan('重新核实');
     assert.equal(run?.analyzed, 1); assert.equal(run?.newSignals, 1); assert.ok(run?.sources.every(item => ['cached', 'disabled'].includes(item.status)));
@@ -85,8 +85,8 @@ test('重新核实复用候选，不重复调用 X 或网页搜索', async () =>
 test('分批审核保留已成功批次，后续批次失败不重做或丢掉结果', async () => {
   const store = new Store(':memory:'); let calls = 0;
   try {
-    store.put('rules', 'rule', rule());
-    for(let i=0;i<30;i++) ingest(store, { ...evidence(), id: `batch-${i}`, text: 'Original content '.repeat(60) });
+    store.put('rules', 'rule', rule()); store.put('sources',source.id,source);
+    for(let i=0;i<30;i++) ingest(store, { ...evidence(), id: `batch-${i}`, url:`https://openai.com/news/batch-${i}`, finalUrl:`https://openai.com/news/batch-${i}`, text: 'Original content '.repeat(60) });
     const runner = new Runner(store, new Collector(store, { request: async () => { throw new Error('unused'); } }, '', false), { analyze: async batch => { calls++; assert.equal(batch.length, 15); if(calls === 2) throw new Error('second batch offline'); return { signals: [], excludedEvidenceIds: batch.map(item=>item.id) }; } });
     const run = await runner.scan('重新核实'); assert.equal(run?.status, 'partial'); assert.equal(run?.analyzed, 15); assert.equal(calls, 2);
     const saved=store.list<Candidate>('candidates'); assert.equal(saved.filter(item=>item.processedHash === item.contentHash).length, 15);
@@ -103,20 +103,19 @@ test('合并同一事件时保留已取得的原始证据，后来的摘要不�
   const old = signal(); const snippet = { ...evidence(), id: 'new-snippet', original: false, official: false };
   const next = analysis(snippet); next.events[0].existingEventId = old.id;
   const merged = validateAnalysis(next, [snippet], [rule()], [old])[0];
-  assert.equal(merged.status, 'confirmed'); assert.equal(merged.evidence.length, 2);
+  assert.equal(merged.status, 'confirmed'); assert.equal(merged.evidence.length, 1); assert.equal(merged.evidence[0].original,true);
   next.events[0].status = 'pending'; assert.equal(validateAnalysis(next, [snippet], [rule()], [old])[0].status, 'pending');
 });
-test('网页查询带最近一天筛选；识别验证码后不继续同轮的其他查询', async () => {
+test('网页查询用于补证，不强制缩窄至一天；验证码明确报错', async () => {
   const store = new Store(':memory:'); const urls: URL[] = [];
   try {
-    for (const item of store.list<Source>('sources')) store.remove('sources', item.id);
-    const web = { ...source, id: 'bing', kind: 'web' as const, url: 'https://www.bing.com/search' }; store.put('sources', web.id, web);
-    store.put('rules', 'one', { ...rule(), id: 'one', query: 'first' }); store.put('rules', 'two', { ...rule(), id: 'two', query: 'second' });
-    const http: HttpClient = { request: async raw => { urls.push(new URL(raw)); return doc('<body>Verify you are human captcha</body>', raw); } };
-    const run = await new Runner(store, new Collector(store, http, '', false), { analyze: async () => ({ signals: [], excludedEvidenceIds: [] }) }).scan('测试');
-    assert.equal(urls.length, 1); assert.equal(urls[0].searchParams.get('filters'), 'ex1:"ez1"'); assert.equal(run?.status, 'failed');
+    const web = { ...source, id: 'bing', kind: 'web' as const, url: 'https://www.bing.com/search' };
+    const collector=new Collector(store,{request:async raw=>{urls.push(new URL(raw));return doc('<body>Verify you are human captcha</body>',raw);}},'',false);
+    await assert.rejects(collector.web(web,'model release'),/验证/);
+    assert.equal(urls.length,1);assert.equal(urls[0].searchParams.has('filters'),false);
   } finally { store.close(); }
 });
+
 test('首次基线、待核实、暂停和历史事件不通知；升级可通知并去重', () => {
   const store = new Store(':memory:'); try {
     const value = signal(); const r = rule(); assert.equal(eligible(value, { ...r, baselineAt: null }), false); assert.equal(eligible({ ...value, status: 'pending' }, r), false); assert.equal(eligible(value, { ...r, enabled: false }), false); assert.equal(eligible({ ...value, occurredAt: new Date(now - 7200000).toISOString() }, r), false);

@@ -3,10 +3,11 @@ import type { MailJob, Rule, Signal } from '../shared/types.js';
 import { config, safeError } from './config.js';
 import { Store } from './db.js';
 import { hash } from './parse.js';
-export function eligible(signal: Signal, rule: Rule): boolean { return rule.enabled && rule.notify && rule.kind === 'keyword' && signal.status === 'confirmed' && signal.ruleIds.includes(rule.id) && !!rule.baselineAt && !!signal.occurredAt && Date.parse(signal.occurredAt) > Date.parse(rule.baselineAt); }
+import { currentSignal } from '../shared/freshness.js';
+export function eligible(signal: Signal, rule: Rule, now=Date.now()): boolean { return currentSignal(signal,now) && rule.enabled && rule.notify && rule.kind === 'keyword' && signal.status === 'confirmed' && signal.ruleIds.includes(rule.id) && !!rule.baselineAt && !!signal.occurredAt && Date.parse(signal.occurredAt) > Date.parse(rule.baselineAt); }
 export function queueNotifications(store: Store, signals: Signal[], rules: Rule[], now = Date.now()): number {
   let count = 0;
-  store.transaction(() => { for (const signal of signals) for (const rule of rules) { if (!eligible(signal, rule)) continue; const id = hash(`${rule.id}:${signal.id}`); if (store.get('mail', id)) continue;
+  store.transaction(() => { for (const signal of signals) for (const rule of rules) { if (!eligible(signal, rule,now)) continue; const id = hash(`${rule.id}:${signal.id}`); if (store.get('mail', id)) continue;
     const job: MailJob = { id, eventId: signal.id, ruleId: rule.id, title: signal.title, recipient: store.settings().recipient, status: 'pending', attempts: 0, nextAttemptAt: new Date(now).toISOString(), createdAt: new Date(now).toISOString(), submittedAt: null, error: null, messageId: `<${id}@signal.local>`, signal };
     store.put('mail', id, job); count++;
   } }); return count;
@@ -28,7 +29,7 @@ export class Mailer {
     if (!mailConfigured() && !allowTestTransport || !this.store.settings().recipient) return;
     for (const job of this.store.list<MailJob>('mail').filter(item => ['pending', 'retry'].includes(item.status) && Date.parse(item.nextAttemptAt) <= now).slice(0, 10)) {
       const rule = this.store.get<Rule>('rules', job.ruleId); const signal = this.store.get<Signal>('events', job.eventId);
-      if (!rule || !signal || !eligible(signal, rule)) { this.store.put('mail', job.id, { ...job, status: 'failed', error: '监控已暂停/删除或事件核验状态改变，取消发送' }); continue; }
+      if (!rule || !signal || !eligible(signal, rule,now)) { this.store.put('mail', job.id, { ...job, status: 'failed', error: '监控已暂停/删除、事件过期或核验状态改变，取消发送' }); continue; }
       const updated = { ...job, recipient: this.store.settings().recipient, attempts: job.attempts + 1, signal };
       try { const result = await this.transport.sendMail({ from: config.smtpFrom, to: updated.recipient, subject: `[FirstCue] ${signal.title}`, messageId: updated.messageId, ...mailContent(signal, rule.name) }); if (!result.accepted.length || result.rejected?.length) throw new Error('SMTP 未接受收件人'); this.store.put('mail', job.id, { ...updated, status: 'submitted', submittedAt: new Date(now).toISOString(), error: null }); }
       catch (error) { this.store.put('mail', job.id, { ...updated, status: updated.attempts >= 4 ? 'failed' : 'retry', nextAttemptAt: new Date(now + 60000 * 2 ** updated.attempts).toISOString(), error: safeError(error) }); }
