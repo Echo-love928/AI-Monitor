@@ -10,7 +10,7 @@ import { nonTwitterDiscovery, platformOf } from '../shared/discovery.js';
 import { discoverySearches, xQueryFor } from './search.js';
 import { currentSignal, expiredEvidence, FRESHNESS_MS } from '../shared/freshness.js';
 import { expireContent } from './retention.js';
-import { syncTwitterEvents } from './twitter-policy.js';
+import { syncEvidenceMetadata } from './twitter-policy.js';
 
 export interface AnalysisService { analyze(evidence: Evidence[], rules: Rule[], prior: Signal[]): Promise<AnalysisResult>; }
 export class Runner {
@@ -89,7 +89,15 @@ export class Runner {
             if(run.sources.at(-1)?.status==='failed')failedEngines.add(engine.id);
           } else {run.sources.push({sourceId:job.source.id,name:job.source.name,kind:job.source.kind,status:'failed',count:0,message:'没有可用的公开搜索引擎，保留后续检查',purpose:'discovery',query:job.query});}
           for(const item of mergeEvidence(found).filter(item=>item.quality?.decision!=='filtered').slice(0,3)) {
-            const value=applyQuality(nonTwitterDiscovery(item,started)?item:await this.collector.enrich(item));
+            const video=platformOf(item)==='bilibili';
+            const readVideo=video && webRequests<settings.searchPerRunLimit;
+            let material=item;
+            if(readVideo) {
+              webRequests++;
+              const details=await collect(job.source,async()=>this.collector.result(job.source,[await this.collector.videoDetails(item)],'success','已读取视频详情中的作者头像、转发与评论'),'metrics');
+              material=details[0] || {...item,metricsAttemptedAt:new Date().toISOString()};
+            } else if(!video && !nonTwitterDiscovery(item,started))material=await this.collector.enrich(item);
+            const value=applyQuality(material);
             const index=gathered.findIndex(ev=>ev.id===value.id);if(index>=0)gathered[index]=value;else gathered.push(value);
           }
         }
@@ -98,10 +106,14 @@ export class Runner {
 
       const unique = [...new Map(gathered.map(item => [item.id, item])).values()];
       for (const item of unique) ingest(this.store, item);
+      if(!recheck)for(const source of sources.filter(item=>item.enabled && item.format==='bilibili')) {
+        const limit=Math.min(3,settings.searchPerRunLimit-webRequests);if(limit<=0)break;
+        await collect(source,()=>this.collector.refreshVideoMetrics(source,limit),'metrics');webRequests+=limit;
+      }
       const all = this.store.list<Candidate>('candidates');
       const classified = all.map(item => ({ ...item, ...applyQuality(item, all) }));
       for (const item of classified) this.store.put('candidates', item.id, { ...item, processedHash: item.quality?.decision === 'filtered' ? item.contentHash : item.processedHash });
-      syncTwitterEvents(this.store);
+      syncEvidenceMetadata(this.store);
       const enabledSources = new Set(sources.filter(source => source.enabled).map(source => source.id));
       const disabledPlatforms=new Set(sources.filter(source=>!source.enabled && ['bilibili','weibo'].includes(source.format||'')).map(source=>source.id));
       const pending = classified.filter(item => !disabledPlatforms.has(platformOf(item)) && enabledSources.has(item.sourceId) && discoveryCandidate(item,started) && item.processedHash !== item.contentHash && item.attempts < 3);
@@ -117,7 +129,10 @@ export class Runner {
           if (evidenceCount >= settings.candidatePerRunLimit) break;
           const lane=item.sourceKind==='x'?'x':'other';
           if(materialCounts[lane]>=materialLimits[lane])continue;
-          const value = applyQuality(recheck ? item : await this.collector.enrich(item), classified); save(value);
+          const videoDue=platformOf(item)==='bilibili' && started-(Date.parse(item.metricsAttemptedAt||'')||0)>=30*60000;
+          const skipVideo=videoDue && webRequests>=settings.searchPerRunLimit;
+          if(!recheck && videoDue && !skipVideo)webRequests++;
+          const value = applyQuality(recheck || skipVideo ? item : await this.collector.enrich(item), classified); save(value);
           if(value.quality?.decision === 'filtered') continue;
           if(value.publishedAt && Date.parse(value.publishedAt)<since) {
             save({...value,quality:{version:value.quality!.version,decision:'filtered',reason:'原文发布时间超出本轮监控窗口，不作为新事件'}}); continue;
@@ -185,6 +200,7 @@ export class Runner {
         result.filtered = values.filter(item => item.quality?.decision === 'filtered').length; result.filterReasons = {};
         for (const item of values.filter(item => item.quality?.decision === 'filtered')) result.filterReasons[item.quality!.reason] = (result.filterReasons[item.quality!.reason] || 0) + 1;
       }
+      syncEvidenceMetadata(this.store);
       queueNotifications(this.store, this.store.list<Signal>('events'), rules);
       for (const rule of rules) { const currentRule = this.store.get<Rule>('rules', rule.id); if (currentRule) this.store.put('rules', rule.id, { ...currentRule, baselineAt: currentRule.baselineAt || run.startedAt, lastRunAt: run.startedAt, nextRunAt: new Date(started + INTERVAL_MS).toISOString() }); }
       const active = run.sources.filter(item => item.status !== 'disabled' && item.status !== 'standby'); const succeeded = active.filter(item => ['success', 'empty', 'cached', 'partial'].includes(item.status));

@@ -93,14 +93,17 @@ test('B站公开接口解析真实作者、发布时间与链接；简介读取�
   const store=new Store(':memory:');try{
     let calls=0;
     const collector=new Collector(store,{request:async(url,options)=>{
-      calls++;assert.equal(options?.headers?.Cookie,undefined);assert.equal(new URL(url).searchParams.get('order'),'pubdate');
+      calls++;assert.equal(options?.headers?.Cookie,undefined);
+      if(new URL(url).pathname==='/x/web-interface/view')return {status:503,url,headers:{},text:'Detail temporarily unavailable'};
+      assert.equal(new URL(url).searchParams.get('order'),'pubdate');
       return {status:200,url,headers:{},text:JSON.stringify({code:0,data:{result:[{bvid:'BVabc123',title:'<em>New model</em> release',author:'作者',mid:123,description:body,pubdate:Math.floor(Date.parse(date)/1000),play:50},{bvid:'BVold123',title:'Old release',author:'作者',description:body,pubdate:1577836800}]}})};
     }},'',false);
     const typed={...bili,url:'https://api.bilibili.com/x/web-interface/search/type'};
     const result=await collector.videoSearch(typed,'model');assert.equal(result.items.length,2);assert.equal(nonTwitterDiscovery(result.items[0]),true);assert.equal(nonTwitterDiscovery(result.items[1]),false);
     assert.equal(result.items[0].author,'作者');assert.equal(result.items[0].authorId,'123');assert.equal(result.items[0].finalUrl,'https://www.bilibili.com/video/BVabc123/');assert.equal(result.items[0].views,50);
-    assert.equal((await collector.enrich(result.items[0])).original,true);assert.equal(calls,1);
-    await collector.videoSearch(typed,'model');assert.equal(calls,1);
+    assert.equal((await collector.enrich(result.items[0])).original,true);assert.equal(calls,2);
+    assert.equal((await collector.enrich(result.items[0])).original,true);assert.equal(calls,2);
+    await collector.videoSearch(typed,'model');assert.equal(calls,2);
   }finally{store.close();}
 });
 

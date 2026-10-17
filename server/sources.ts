@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { load } from 'cheerio';
-import type { Account, Candidate, Evidence, Source, SourceResult } from '../shared/types.js';
+import type { Account, Candidate, Evidence, Signal, Source, SourceResult } from '../shared/types.js';
 import { Store } from './db.js';
 import { config, safeError } from './config.js';
 import { checkHttp, type HttpClient } from './http.js';
@@ -10,25 +10,74 @@ import { FRESHNESS_MS, withinWindow } from '../shared/freshness.js';
 import { TWITTER_METRICS_INTERVAL, twitterMetrics } from '../shared/twitter.js';
 import { twitterFields } from './twitter-policy.js';
 import { nonTwitterDiscovery, platformOf } from '../shared/discovery.js';
+import { metadataFields, normalizeMetadata } from '../shared/engagement.js';
+import { sourceMetadata } from './metadata.js';
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 export class Throttle { private last = new Map<string, number>(); async wait(key: string, ms: number): Promise<void> { const delay = Math.max(0, (this.last.get(key) || 0) + ms - Date.now()); if (delay) await sleep(delay); this.last.set(key, Date.now()); } }
-const tweetSchema = z.object({ id: z.string(), url: z.string(), text: z.string(), createdAt: z.string(), author: z.object({ id: z.string(), userName: z.string(), followers:z.number().nullish(),isBlueVerified:z.boolean().nullish() }), likeCount: z.number().nullish(), replyCount: z.number().nullish(), retweetCount: z.number().nullish(), viewCount: z.number().nullish(), isReply: z.boolean().nullish(), inReplyToId: z.string().nullish(), inReplyToUserId: z.string().nullish(), conversationId: z.string().nullish(), retweeted_tweet: z.unknown().optional(), quoted_tweet: z.unknown().optional(), entities: z.object({urls:z.array(z.object({expanded_url:z.string().optional(),url:z.string().optional()})).optional()}).nullish() }).passthrough();
+const rawCount = z.unknown().optional();
+const tweetSchema = z.object({ id: z.string(), url: z.string(), text: z.string(), createdAt: z.string(), author: z.object({ id: z.string(), userName: z.string(), name:z.string().nullish(),profilePicture:z.string().nullish(),followers:rawCount,isBlueVerified:z.boolean().nullish() }), likeCount: rawCount, replyCount: rawCount, retweetCount: rawCount, viewCount: rawCount, bookmarkCount:rawCount, isReply: z.boolean().nullish(), inReplyToId: z.string().nullish(), inReplyToUserId: z.string().nullish(), conversationId: z.string().nullish(), retweeted_tweet: z.unknown().optional(), quoted_tweet: z.unknown().optional(), entities: z.object({urls:z.array(z.object({expanded_url:z.string().optional(),url:z.string().optional()})).optional()}).nullish() }).passthrough();
 const pageSchema = z.object({ tweets: z.array(tweetSchema), has_next_page: z.boolean(), next_cursor: z.string().nullish(), status: z.string().optional(), message: z.string().optional() });
 export interface Checkpoint { since: number; until?: number; cursor?: string; }
 export interface Collected { items: Evidence[]; result: SourceResult; }
 export function ingest(store: Store, item: Evidence): void {
   const old = store.get<Candidate>('candidates', item.id);
-  item = { ...item, firstDiscoveredAt: old?.firstDiscoveredAt || old?.fetchedAt || item.firstDiscoveredAt || item.fetchedAt };
+  const incoming = normalizeMetadata(item);
+  item = normalizeMetadata({ ...item, ...metadataFields(old || {}), ...metadataFields(item), firstDiscoveredAt: old?.firstDiscoveredAt || old?.fetchedAt || item.firstDiscoveredAt || item.fetchedAt });
+  // A fresh X response must still fail the existing thresholds if required
+  // metrics disappeared; optional author fields can retain their last value.
+  if (item.sourceKind === 'x') for (const key of ['likes', 'reposts', 'views', 'authorFollowers'] as const) item[key] = incoming[key];
   if (old && old.collectedHash === item.contentHash) {
     const metadataChanged=old.postType !== item.postType || JSON.stringify(old.outboundUrls) !== JSON.stringify(item.outboundUrls);
     const recovered=item.sourceKind === 'x' && old.quality?.decision === 'filtered' && item.quality?.decision === 'eligible' && (metadataChanged || !twitterMetrics(old).passed);
-    store.put('candidates', item.id, { ...old, firstDiscoveredAt: item.firstDiscoveredAt, ...(item.sourceKind === 'x' ? {...twitterFields(item),quality:item.quality,...(item.quality?.decision === 'filtered' ? {processedHash:old.contentHash} : {})} : {}), postType: item.postType || old.postType, inReplyToId: item.inReplyToId, inReplyToAuthorId: item.inReplyToAuthorId, conversationId: item.conversationId, outboundUrls: item.outboundUrls || old.outboundUrls, fetchedAt: item.fetchedAt, likes: item.likes, replies: item.replies, reposts: item.reposts, views: item.views, discoveredBy: [...new Set([...(old.discoveredBy || [old.sourceId]), ...(item.discoveredBy || [item.sourceId])])], ...(recovered ? {original:item.original,quality:item.quality,processedHash:null,attempts:0} : {}) }); return;
+    store.put('candidates', item.id, { ...old, ...metadataFields(item), firstDiscoveredAt: item.firstDiscoveredAt, ...(item.sourceKind === 'x' ? {...twitterFields(item),quality:item.quality,...(item.quality?.decision === 'filtered' ? {processedHash:old.contentHash} : {})} : {}), postType: item.postType || old.postType, inReplyToId: item.inReplyToId, inReplyToAuthorId: item.inReplyToAuthorId, conversationId: item.conversationId, outboundUrls: item.outboundUrls || old.outboundUrls, fetchedAt: item.fetchedAt, discoveredBy: [...new Set([...(old.discoveredBy || [old.sourceId]), ...(item.discoveredBy || [item.sourceId])])], ...(recovered ? {original:item.original,quality:item.quality,processedHash:null,attempts:0} : {}) }); return;
   }
   store.put('candidates', item.id, { ...item, collectedHash: item.contentHash, processedHash: old?.processedHash || null, attempts: 0 });
 }
 export class Collector {
   throttle = new Throttle();
   constructor(public store: Store, public http: HttpClient, public xKey = config.xKey, public timing = true) {}
+  async videoDetails(item: Evidence): Promise<Evidence> {
+    const bvid = new URL(item.finalUrl).pathname.match(/^\/video\/(BV[A-Za-z0-9]+)\/?$/)?.[1];
+    if (!bvid) throw new Error('B站视频链接未包含有效 BV 号');
+    const now=Date.now();
+    const schema=z.object({bvid:z.literal(bvid),owner:z.object({name:z.string().optional()}).passthrough().optional(),stat:z.object({}).passthrough(),title:z.string().optional(),desc:z.string().optional(),pubdate:z.number().optional()}).passthrough();
+    type VideoData=z.infer<typeof schema>;
+    let cache=this.store.get<{at:number;data?:VideoData;error?:string}>('video-details',bvid);
+    if (!cache || now-cache.at>=TWITTER_METRICS_INTERVAL) {
+      try {
+        if(this.timing)await this.throttle.wait('bilibili-details',2000);
+        const url=new URL('https://api.bilibili.com/x/web-interface/view');url.searchParams.set('bvid',bvid);
+        const doc=await this.http.request(url.href,{headers:{Referer:'https://www.bilibili.com/'},maxBytes:1024*1024,timeoutMs:15000});checkHttp(doc);
+        const response=z.object({code:z.number(),message:z.string().optional(),data:z.unknown()}).parse(JSON.parse(doc.text));
+        if(response.code!==0)throw new Error(`B站视频详情不可用：${response.code} ${response.message||''}`);
+        cache={at:Date.now(),data:schema.parse(response.data)};
+        this.store.put('video-details',bvid,cache);
+      } catch(error) {
+        this.store.put('video-details',bvid,{at:Date.now(),error:safeError(error)});
+        throw error;
+      }
+    }
+    if(cache.error || !cache.data)throw new Error(cache.error || 'B站视频详情缺失');
+    const data=cache.data;const description=load(data.desc||'').text().trim();
+    const preserve=item.original && item.contentKind==='description';
+    const text=preserve?item.text:description.length>=40?'[B站公开视频简介，未读取视频或字幕] '+description:item.text;
+    return applyQuality(normalizeMetadata({...item,...metadataFields(sourceMetadata('bilibili',data)),author:data.owner?.name || item.author,
+      ...(preserve?{}:{title:data.title || item.title,text,contentKind:'description' as const,original:description.length>=40,publishedAt:data.pubdate?isoDate(new Date(data.pubdate*1000).toISOString()):item.publishedAt,contentHash:hash(`${data.title || item.title}|${text}`)}),
+      firstDiscoveredAt:item.firstDiscoveredAt || item.fetchedAt,fetchedAt:new Date(Math.max(Date.parse(item.fetchedAt)||0,cache.at)).toISOString(),metricsCheckedAt:new Date(cache.at).toISOString(),metricsAttemptedAt:new Date(now).toISOString()}));
+  }
+  async refreshVideoMetrics(source: Source, limit: number, now=Date.now()): Promise<Collected> {
+    const visible=new Set(this.store.list<Signal>('events').flatMap(event=>event.evidence.map(item=>item.finalUrl)));
+    const due=this.store.list<Candidate>('candidates').filter(item=>item.sourceId===source.id && platformOf(item)==='bilibili' && item.original && withinWindow(item.publishedAt,now) && now-(Date.parse(item.metricsAttemptedAt||'')||0)>=TWITTER_METRICS_INTERVAL);
+    due.sort((a,b)=>Number(visible.has(b.finalUrl))-Number(visible.has(a.finalUrl)) || (Date.parse(a.metricsAttemptedAt||'')||0)-(Date.parse(b.metricsAttemptedAt||'')||0));
+    const selected=[...new Map(due.map(item=>[item.finalUrl,item])).values()].slice(0,Math.max(0,Math.min(3,limit)));
+    const items:Evidence[]=[];const errors:string[]=[];
+    for(const old of selected) {
+      this.store.put('candidates',old.id,{...old,metricsAttemptedAt:new Date(now).toISOString()});
+      try {const value=await this.videoDetails(old);ingest(this.store,value);items.push(value);}
+      catch(error){errors.push(safeError(error));}
+    }
+    return this.result(source,items,errors.length?items.length?'partial':'failed':items.length?'success':'cached',`视频详情回查 ${items.length}/${selected.length} 条，补齐作者头像与互动；${errors.length?errors.join('；'):'30 分钟内复用详情'}`);
+  }
   async web(source: Source, query: string): Promise<Collected> {
     const cacheId = hash(`web-quality-v2:${source.id}:${query}`); const cache = this.store.get<{ expires: number; items: Evidence[] }>('cache', cacheId);
     if (cache && cache.expires > Date.now()) return this.result(source, cache.items.map(item=>applyQuality(item)), 'cached', '复用 30 分钟内结果');
@@ -47,7 +96,7 @@ export class Collector {
     return this.result(source,items,found.result.status,`经 ${engine.name} 发现公开内容；${found.result.message}`);
   }
   async videoSearch(source:Source,query:string):Promise<Collected> {
-    const cacheId=hash(`bilibili-public-v2:${query}`);const cache=this.store.get<{expires:number;items:Evidence[]}>('cache',cacheId);
+    const cacheId=hash(`bilibili-public-v3:${query}`);const cache=this.store.get<{expires:number;items:Evidence[]}>('cache',cacheId);
     if(cache && cache.expires>Date.now())return this.result(source,cache.items.map(item=>applyQuality(item)),'cached','复用 30 分钟内的公开视频简介');
     if(this.timing)await this.throttle.wait(source.id,5000);
     const url=new URL(source.url);const typed=url.pathname.endsWith('/type');
@@ -58,8 +107,8 @@ export class Collector {
     if(data.code!==0)throw new Error(`B站公开搜索不可用：${data.code} ${data.message||''}`);
     const results=z.object({result:z.array(z.unknown())}).parse(data.data).result;
     const rows=typed?results:z.array(z.object({result_type:z.string(),data:z.array(z.unknown()).optional()})).parse(results).find(item=>item.result_type==='video')?.data || [];
-    const schema=z.object({bvid:z.string().regex(/^BV[A-Za-z0-9]+$/),title:z.string(),author:z.string(),mid:z.union([z.number(),z.string()]).optional(),description:z.string().optional(),pubdate:z.number(),play:z.number().optional(),like:z.number().optional(),share:z.number().optional()});
-    const items=rows.slice(0,10).flatMap(row=>{const parsed=schema.safeParse(row);if(!parsed.success)return[];const item=parsed.data;const text=load(item.description||'').text().trim();return[applyQuality(makeEvidence(source,{url:`https://www.bilibili.com/video/${item.bvid}/`,externalId:item.bvid,title:load(item.title).text(),text:'[B站公开视频简介，未读取视频或字幕] '+text,publishedAt:isoDate(new Date(item.pubdate*1000).toISOString()),author:item.author,authorId:item.mid?String(item.mid):undefined,contentKind:'description',original:text.length>=40,views:item.play,likes:item.like,reposts:item.share}))];});
+    const schema=z.object({bvid:z.string().regex(/^BV[A-Za-z0-9]+$/),title:z.string(),author:z.string(),mid:z.union([z.number(),z.string()]).optional(),description:z.string().optional(),pubdate:z.number()}).passthrough();
+    const items=rows.slice(0,10).flatMap(row=>{const parsed=schema.safeParse(row);if(!parsed.success)return[];const item=parsed.data;const text=load(item.description||'').text().trim();return[applyQuality(makeEvidence(source,{url:`https://www.bilibili.com/video/${item.bvid}/`,externalId:item.bvid,title:load(item.title).text(),text:'[B站公开视频简介，未读取视频或字幕] '+text,publishedAt:isoDate(new Date(item.pubdate*1000).toISOString()),author:item.author,contentKind:'description',original:text.length>=40,...sourceMetadata('bilibili',item),metricsCheckedAt:new Date().toISOString()}))];});
     this.store.put('cache',cacheId,{expires:Date.now()+30*60000,items});
     return this.result(source,items,undefined,'公开视频简介与作者、发布时间；保留视频链接，未读取字幕');
   }
@@ -126,12 +175,14 @@ export class Collector {
         const official = config.trustedXIds.includes(tweet.author.id);
         const postType = tweet.retweeted_tweet ? 'repost' : tweet.isReply === true || tweet.inReplyToId ? 'reply' : tweet.isReply === false ? tweet.quoted_tweet ? 'quote' : 'original' : 'unknown';
         const outboundUrls = tweet.entities?.urls?.map(link=>link.expanded_url || link.url || '').filter(Boolean);
-        return applyQuality(makeEvidence(source, { url: tweet.url, title: tweet.text.slice(0, 100), text: tweet.text, externalId: tweet.id, publishedAt, author: `@${tweet.author.userName}`, authorId: tweet.author.id, official, postType, inReplyToId: tweet.inReplyToId || undefined, inReplyToAuthorId: tweet.inReplyToUserId || undefined, conversationId:tweet.conversationId || undefined, outboundUrls, original: postType === 'original', likes: tweet.likeCount ?? undefined, replies: tweet.replyCount ?? undefined, reposts: tweet.retweetCount ?? undefined, views: tweet.viewCount ?? undefined,authorFollowers:tweet.author.followers ?? undefined,authorBlueVerified:tweet.author.isBlueVerified ?? undefined,metricsCheckedAt:new Date(now).toISOString(),metricsAttemptedAt:new Date(now).toISOString(),metricsUnavailable:false }));
+        return applyQuality(makeEvidence(source, { url: tweet.url, title: tweet.text.slice(0, 100), text: tweet.text, externalId: tweet.id, publishedAt, author: `@${tweet.author.userName}`, authorId: tweet.author.id, official, postType, inReplyToId: tweet.inReplyToId || undefined, inReplyToAuthorId: tweet.inReplyToUserId || undefined, conversationId:tweet.conversationId || undefined, outboundUrls, original: postType === 'original', ...sourceMetadata('x',tweet),authorBlueVerified:tweet.author.isBlueVerified ?? undefined,metricsCheckedAt:new Date(now).toISOString(),metricsAttemptedAt:new Date(now).toISOString(),metricsUnavailable:false }));
   }
-  async refreshMetrics(source:Source,now=Date.now()):Promise<Collected> {
+  async refreshMetrics(source:Source,now=Date.now(),targetIds?:ReadonlySet<string>):Promise<Collected> {
     if(!this.xKey) return this.result(source,[],'unconfigured','X 指标回查未配置 Key');
     const settings=this.store.settings();
-    const due=this.store.list<Candidate>('candidates').filter(item=>item.sourceId === source.id && item.sourceKind === 'x' && item.postType === 'original' && withinWindow(item.publishedAt,now) && now-(Date.parse(item.metricsAttemptedAt || item.metricsCheckedAt || '') || 0) >= TWITTER_METRICS_INTERVAL);
+    // Explicit targets support one-time repair of referenced legacy evidence;
+    // scheduled refresh still only reads original posts and obeys the interval.
+    const due=this.store.list<Candidate>('candidates').filter(item=>item.sourceId === source.id && item.sourceKind === 'x' && withinWindow(item.publishedAt,now) && (targetIds ? targetIds.has(item.externalId) : item.postType === 'original' && now-(Date.parse(item.metricsAttemptedAt || item.metricsCheckedAt || '') || 0) >= TWITTER_METRICS_INTERVAL));
     const knownPass=(item:Candidate)=>item.likes!>=10 && item.reposts!>=5 && item.views!>=500;
     due.sort((a,b)=>(Date.parse(a.metricsAttemptedAt || a.metricsCheckedAt || '')||0)-(Date.parse(b.metricsAttemptedAt || b.metricsCheckedAt || '')||0) || Number(knownPass(b))-Number(knownPass(a)) || Date.parse(b.publishedAt!)-Date.parse(a.publishedAt!));
     if(!due.length)return this.result(source,[],'cached','没有到期的原创指标需要回查');
@@ -163,7 +214,10 @@ export class Collector {
     const resolved = { ...account, userId: data.data.id }; this.store.put('accounts', account.id, resolved); return resolved;
   }
   async enrich(item: Evidence): Promise<Evidence> {
-    if(platformOf(item)==='bilibili' && nonTwitterDiscovery(item))return item;
+    if(platformOf(item)==='bilibili') {
+      try {return await this.videoDetails(item);}
+      catch {if(nonTwitterDiscovery(item))return {...item,metricsAttemptedAt:new Date().toISOString()};}
+    }
     if (item.sourceKind === 'x' || item.original && item.text.length > 600 && (item.contentKind === 'article' || item.contentKind === 'feed' && item.official)) return item;
     const cache = this.store.get<{ at: number; value: Evidence }>('articles', item.url);
     if (cache && Date.now() - cache.at < 30 * 60000) return { ...cache.value, id: item.id, sourceId: item.sourceId, sourceKind: item.sourceKind, discoveredBy: item.discoveredBy || [item.sourceId], official: officialUrl(cache.value.finalUrl) };
@@ -172,7 +226,7 @@ export class Collector {
       const redirect=searchRedirect(doc.text,doc.url);
       if(redirect) { doc=await this.http.request(redirect); checkHttp(doc); }
       const body = article(doc.text, doc.url);
-      const value = { ...item, contentKind:body.contentKind,author:body.author || new URL(doc.url).hostname,authorId:body.authorId || item.authorId,likes:body.likes,views:body.views,reposts:body.reposts, finalUrl: doc.url, text: body.text, outboundUrls:body.outboundUrls, title: body.title || item.title, publishedAt: body.publishedAt || item.publishedAt, original: true, official: officialUrl(doc.url), contentHash: hash(body.text) };
+      const value = normalizeMetadata({ ...item, ...metadataFields(body), contentKind:body.contentKind,author:body.author || item.author || new URL(doc.url).hostname, finalUrl: doc.url, text: body.text, outboundUrls:body.outboundUrls, title: body.title || item.title, publishedAt: body.publishedAt || item.publishedAt, original: true, official: officialUrl(doc.url), contentHash: hash(body.text),metricsCheckedAt:new Date().toISOString() });
       this.store.put('articles', item.url, { at: Date.now(), value }); return value;
     } catch (error) {
       const feed = item.sourceKind === 'rss' ? this.store.get<{ items: Evidence[] }>('feeds', item.sourceId)?.items.find(value => value.id === item.id) : undefined;
@@ -191,6 +245,7 @@ export class Collector {
     return evidence;
   }
   result(source: Source, items: Evidence[], status?: SourceResult['status'], message = ''): Collected {
+    items = items.map(normalizeMetadata);
     const filterReasons:Record<string,number>={}; for(const item of items) if(item.quality?.decision === 'filtered') filterReasons[item.quality.reason]=(filterReasons[item.quality.reason]||0)+1;
     return { items, result: { sourceId: source.id, name: source.name, kind: source.kind, status: status || (items.length ? 'success' : 'empty'), count: items.length, message, filtered:Object.values(filterReasons).reduce((a,b)=>a+b,0), filterReasons } };
   }

@@ -1,6 +1,7 @@
 import type { Evidence, Importance, Signal, Source } from './types.js';
 import { platformOf } from './discovery.js';
 import { FRESHNESS_HOURS, historicalSignal, timestamp } from './freshness.js';
+import { interactionScore } from './engagement.js';
 
 export const importanceLabels: Record<Importance, string> = { urgent: '紧急', high: '高', medium: '中', low: '低' };
 export const importanceRanks: Record<Importance, number> = { urgent: 4, high: 3, medium: 2, low: 1 };
@@ -50,12 +51,14 @@ export function eventTime(signal: Signal, now = Date.now()): number | null {
 // The score is a weighted interaction index, not a view count or an AI judgment.
 export function heatScore(signal: Signal): number | null {
   const values = signal.evidence.filter(originalEvidence).flatMap(item => {
-    const metrics = [item.likes, item.reposts, item.replies, item.views];
-    if (!metrics.some(value => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0)) return [];
-    const metric = (value: number | undefined) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0;
-    return [metric(item.likes) + 2 * metric(item.reposts) + metric(item.replies) + 0.01 * metric(item.views)];
+    const score = interactionScore(item);
+    return score === null ? [] : [score];
   });
   return values.length ? Math.max(...values) : null;
+}
+// The displayed author and counts always belong to the same original evidence.
+export function primaryEvidence(signal: Signal): Evidence | undefined {
+  return signal.evidence.filter(originalEvidence).sort((a, b) => (interactionScore(b) ?? -1) - (interactionScore(a) ?? -1))[0];
 }
 export function selectSignals(signals: Signal[], filters: FeedFilters, now = Date.now()): Signal[] {
   const search = filters.search.trim().toLowerCase();

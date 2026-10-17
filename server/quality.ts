@@ -3,6 +3,7 @@ import { canonical } from './parse.js';
 import { expiredEvidence, withinWindow } from '../shared/freshness.js';
 import { nonTwitterDiscovery, platformOf } from '../shared/discovery.js';
 import { qualifiedTwitter, twitterHeat, twitterMetrics } from '../shared/twitter.js';
+import { metadataFields } from '../shared/engagement.js';
 
 export const QUALITY_VERSION = 2;
 export function routineContent(title: string, eventType = ''): boolean {
@@ -71,8 +72,12 @@ export function mergeEvidence(items: Evidence[]): Evidence[] {
     const key = evidenceKey(item); const old = values.get(key);
     const discoveredBy = [...new Set([...(old?.discoveredBy || (old ? [old.sourceId] : [])), ...(item.discoveredBy || [item.sourceId])])];
     const best = !old || Number(item.original) > Number(old.original) || item.original === old.original && item.text.length > old.text.length ? item : old;
+    const observed = [old,item].filter((value):value is Evidence=>!!value && value.original).sort((a,b)=>Date.parse(a.metricsCheckedAt || a.fetchedAt)-Date.parse(b.metricsCheckedAt || b.fetchedAt));
+    const metadata = observed.reduce<Partial<Evidence>>((fields,value)=>({...fields,...metadataFields(value)}),{});
+    const latest = observed.at(-1);
+    if(latest?.sourceKind==='x') Object.assign(metadata,{likes:latest.likes,reposts:latest.reposts,views:latest.views,authorFollowers:latest.authorFollowers,metricsUnavailable:latest.metricsUnavailable});
     const discovered = [old?.firstDiscoveredAt, old?.fetchedAt, item.firstDiscoveredAt, item.fetchedAt].filter((value): value is string => !!value && Number.isFinite(Date.parse(value)));
-    values.set(key, { ...best, discoveredBy, ...(discovered.length ? { firstDiscoveredAt: new Date(Math.min(...discovered.map(Date.parse))).toISOString() } : {}) });
+    values.set(key, { ...best, ...metadata, discoveredBy, ...(discovered.length ? { firstDiscoveredAt: new Date(Math.min(...discovered.map(Date.parse))).toISOString() } : {}) });
   }
   return [...values.values()];
 }

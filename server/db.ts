@@ -8,7 +8,8 @@ import { nonTwitterDiscovery } from '../shared/discovery.js';
 import { FRESHNESS_HOURS } from '../shared/freshness.js';
 import { expireContent } from './retention.js';
 import { TWITTER_FILTER_VERSION } from '../shared/twitter.js';
-import { syncTwitterEvents } from './twitter-policy.js';
+import { syncEvidenceMetadata, syncTwitterEvents } from './twitter-policy.js';
+import { normalizeMetadata } from '../shared/engagement.js';
 export class Store {
   db: DatabaseSync;
   constructor(filename = path.join(config.dataDir, 'signal.sqlite')) {
@@ -88,6 +89,12 @@ export class Store {
           this.put('video-binding-audit-v1',signal.id,signal);this.put('events',signal.id,{...signal,evidence});
         }
         this.put('state','videoIntroBindingV1',true);
+      }
+      if(!this.get('state','engagementMetadataV1')) {
+        for(const item of this.list<Candidate>('candidates')) this.put('candidates',item.id,normalizeMetadata(item));
+        for(const event of this.list<Signal>('events')) this.put('events',event.id,{...event,evidence:event.evidence.map(normalizeMetadata)});
+        syncEvidenceMetadata(this);
+        this.put('state','engagementMetadataV1',true);
       }
     });
     expireContent(this);

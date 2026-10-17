@@ -157,6 +157,31 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .source-tag.web { background: #fff0e5; color: #945f37; }
 .attention { font-size: 10px; color: var(--muted); white-space: nowrap; }
 .attention b { font: 600 15px var(--mono); color: var(--accent); }
+.signal-original { width: 100%; margin: 0 0 14px; }
+.evidence-author { display: flex; align-items: center; gap: 9px; width: 100%; min-width: 0; margin: 12px 0 8px; color: var(--ink); text-align: left; }
+.signal-original .evidence-author { margin-top: 0; }
+.author-avatar { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; flex: 0 0 32px; overflow: hidden; border-radius: 50%; color: var(--muted); background: var(--soft); border: 1px solid var(--line); }
+.author-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.author-name { display: flex; flex: 1; flex-wrap: wrap; align-items: baseline; gap: 4px 7px; min-width: 0; overflow-wrap: anywhere; font-size: 12px; line-height: 1.5; }
+.author-name strong { font-weight: 600; }
+.author-name small { color: var(--muted); font-size: 11px; }
+.evidence-list .author-name a { display: inline-flex; flex-wrap: wrap; gap: 4px 7px; margin: 0; min-height: 32px; align-items: center; }
+.author-followers { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; color: var(--muted); font-size: 11px; }
+.original-note { display: block; margin-left: 41px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.interaction-block { width: 100%; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.interaction-metrics { display: flex; flex-wrap: wrap; gap: 10px 16px; }
+.interaction-metric { display: inline-flex; align-items: center; gap: 5px; min-width: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.interaction-metric b { color: var(--ink); font: 500 12px var(--mono); }
+.interaction-metric.unavailable b { color: var(--muted); }
+.interaction-metric svg { flex-shrink: 0; }
+.interaction-note { display: block; margin-top: 6px; color: var(--muted); font-size: 11px; }
+@media (max-width: 480px) {
+  .evidence-author { flex-wrap: wrap; }
+  .author-name { flex-basis: calc(100% - 41px); }
+  .author-followers { margin-left: 41px; }
+  .interaction-metrics { gap: 9px 12px; }
+  .signal-row-bottom { flex-wrap: wrap; }
+}
 .signal-actions { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; margin: 0 20px; padding: 7px 0; border-top: 1px solid var(--line); }
 .signal-actions > span { display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--muted); }
 .signal-actions .text-button { min-height: 36px; font-size: 11px; }
