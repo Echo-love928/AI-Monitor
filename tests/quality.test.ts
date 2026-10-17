@@ -105,7 +105,7 @@ test('普通原创读取其引用原文，未继承推文官方身份或编造�
   }finally{store.close();}
 });
 test('只有补充回复不能独立确认或出现在事件列表',()=>{
-  const ev=post({postType:'reply',official:true});const data=analysisSchema.parse({events:[{title:'Reply',summary:'Summary',entity:'model',version:'1',eventType:'release',occurredAt:date,isNewsworthy:true,isNewEvent:true,status:'confirmed',reason:'test',attention:20,attentionReason:'test',tags:[],evidenceIds:[ev.id],ruleIds:[rule.id],existingEventId:null}],excludedEvidenceIds:[]});
+  const ev=post({postType:'reply',official:true});const data=analysisSchema.parse({events:[{title:'Reply',summary:'Summary',entity:'model',version:'1',eventType:'release',occurredAt:date,isNewsworthy:true,isNewEvent:true,status:'confirmed',reason:'test',attention:20,attentionReason:'test', importance: 'medium', importanceReason: 'Fixture impact',tags:[],evidenceIds:[ev.id],ruleIds:[rule.id],existingEventId:null}],excludedEvidenceIds:[]});
   const result=validateAnalysis(data,[ev],[rule],[])[0];assert.equal(result.status,'pending');assert.equal(result.auditOnly,true);
 });
 test('历史重标保留原始记录、未知类型和规则，不删除数据，审计项从主列表移除',()=>{

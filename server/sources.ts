@@ -18,10 +18,11 @@ export interface Checkpoint { since: number; until?: number; cursor?: string; }
 export interface Collected { items: Evidence[]; result: SourceResult; }
 export function ingest(store: Store, item: Evidence): void {
   const old = store.get<Candidate>('candidates', item.id);
+  item = { ...item, firstDiscoveredAt: old?.firstDiscoveredAt || old?.fetchedAt || item.firstDiscoveredAt || item.fetchedAt };
   if (old && old.collectedHash === item.contentHash) {
     const metadataChanged=old.postType !== item.postType || JSON.stringify(old.outboundUrls) !== JSON.stringify(item.outboundUrls);
     const recovered=item.sourceKind === 'x' && old.quality?.decision === 'filtered' && item.quality?.decision === 'eligible' && (metadataChanged || !twitterMetrics(old).passed);
-    store.put('candidates', item.id, { ...old, ...(item.sourceKind === 'x' ? {...twitterFields(item),quality:item.quality,...(item.quality?.decision === 'filtered' ? {processedHash:old.contentHash} : {})} : {}), postType: item.postType || old.postType, inReplyToId: item.inReplyToId, inReplyToAuthorId: item.inReplyToAuthorId, conversationId: item.conversationId, outboundUrls: item.outboundUrls || old.outboundUrls, fetchedAt: item.fetchedAt, likes: item.likes, replies: item.replies, reposts: item.reposts, views: item.views, discoveredBy: [...new Set([...(old.discoveredBy || [old.sourceId]), ...(item.discoveredBy || [item.sourceId])])], ...(recovered ? {original:item.original,quality:item.quality,processedHash:null,attempts:0} : {}) }); return;
+    store.put('candidates', item.id, { ...old, firstDiscoveredAt: item.firstDiscoveredAt, ...(item.sourceKind === 'x' ? {...twitterFields(item),quality:item.quality,...(item.quality?.decision === 'filtered' ? {processedHash:old.contentHash} : {})} : {}), postType: item.postType || old.postType, inReplyToId: item.inReplyToId, inReplyToAuthorId: item.inReplyToAuthorId, conversationId: item.conversationId, outboundUrls: item.outboundUrls || old.outboundUrls, fetchedAt: item.fetchedAt, likes: item.likes, replies: item.replies, reposts: item.reposts, views: item.views, discoveredBy: [...new Set([...(old.discoveredBy || [old.sourceId]), ...(item.discoveredBy || [item.sourceId])])], ...(recovered ? {original:item.original,quality:item.quality,processedHash:null,attempts:0} : {}) }); return;
   }
   store.put('candidates', item.id, { ...item, collectedHash: item.contentHash, processedHash: old?.processedHash || null, attempts: 0 });
 }

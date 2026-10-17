@@ -274,3 +274,28 @@ label > input, label > textarea { border-color: #d9cdbf; border-radius: 7px; min
 }
 @media (max-height: 780px) and (min-width: 681px) { .creator-note { display: none; } }
 @media (prefers-reduced-motion: reduce) { *, *:before, *:after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+
+.signal-filters { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; padding: 18px 0 8px; }
+.signal-filters label { display: flex; flex-direction: column; gap: 7px; margin: 0; min-width: 0; font-size: 12px; color: var(--muted); }
+.signal-filters select, .signal-filters select:last-child { width: 100%; max-width: none; margin: 0; min-height: 44px; font-size: 12px; color: var(--ink); background-color: var(--white); }
+.filter-explanation { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.filter-explanation .text-button { flex-shrink: 0; min-height: 44px; }
+.sort-explanation { font-size: 11px; line-height: 1.8; color: var(--muted); margin: 0 0 16px; }
+.importance-urgent { color: var(--danger); background: var(--danger-bg); border-color: #f0d2cb; }
+.importance-high { color: #8b4b1d; background: var(--accent-soft); border-color: #e7c3a8; }
+.importance-medium { color: var(--success); background: var(--success-bg); border-color: #d6e8d9; }
+.importance-low, .importance-unknown { color: var(--muted); background: var(--soft); border-color: var(--line); }
+.detail-scores { display: grid; gap: 16px; padding: 20px 3px; margin-bottom: 20px; border-bottom: 1px solid var(--line); }
+.detail-scores strong { font-size: 13px; }
+.detail-scores p { color: var(--muted); font-size: 12px; line-height: 1.8; margin-top: 5px; }
+.signal-times { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
+@media (max-width: 1150px) { .signal-filters { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 680px) {
+  .signal-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .signal-filters label:last-child { grid-column: 1 / -1; }
+  .signal-filters select { font-size: 16px; padding: 8px 25px 8px 10px; }
+  .filter-explanation { align-items: flex-start; }
+  .filter-explanation > span { padding: 9px 0; }
+  .signal-row-top { align-items: flex-start; gap: 8px; }
+  .signal-row-top > .mono { white-space: normal; text-align: right; }
+}

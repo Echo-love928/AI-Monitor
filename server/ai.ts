@@ -8,7 +8,7 @@ import { applyQuality, bindVideoEvidence, mergeEvidence, officialUrl, QUALITY_VE
 import { qualifiedTwitter, TWITTER_FILTER_VERSION } from '../shared/twitter.js';
 import { nonTwitterDiscovery } from '../shared/discovery.js';
 import { currentSignal, FRESHNESS_MS, signalTime, withinWindow } from '../shared/freshness.js';
-const eventSchema = z.object({ title: z.string().min(1).max(240), summary: z.string().min(1).max(1600), entity: z.string().min(1).max(120), version: z.string().max(100), eventType: z.string().min(1).max(80), occurredAt: z.string().nullable(), isNewsworthy:z.boolean(), isNewEvent:z.boolean(), status: z.enum(['confirmed', 'pending', 'rejected']), reason: z.string().max(1600), attention: z.number().int().min(0).max(100), attentionReason: z.string().max(800), tags: z.array(z.string().max(40)).max(8), evidenceIds: z.array(z.string()).min(1).max(30), ruleIds: z.array(z.string()).max(30), existingEventId: z.string().nullable() });
+const eventSchema = z.object({ title: z.string().min(1).max(240), summary: z.string().min(1).max(1600), entity: z.string().min(1).max(120), version: z.string().max(100), eventType: z.string().min(1).max(80), occurredAt: z.string().nullable(), isNewsworthy:z.boolean(), isNewEvent:z.boolean(), status: z.enum(['confirmed', 'pending', 'rejected']), reason: z.string().max(1600), attention: z.number().int().min(0).max(100), attentionReason: z.string().max(800), importance: z.enum(['urgent', 'high', 'medium', 'low']), importanceReason: z.string().min(1).max(800), tags: z.array(z.string().max(40)).max(8), evidenceIds: z.array(z.string()).min(1).max(30), ruleIds: z.array(z.string()).max(30), existingEventId: z.string().nullable() });
 export const analysisSchema = z.object({ events: z.array(eventSchema).max(30), excludedEvidenceIds: z.array(z.string()).max(60) });
 export type Analysis = z.infer<typeof analysisSchema>;
 export interface AnalysisIssue {evidenceIds:string[];message:string;}
@@ -60,9 +60,9 @@ export function validateBatch(data: Analysis, evidence: Evidence[], rules: Rule[
     let auditReason = '';
     if(!event.isNewsworthy || routineContent(event.title,event.eventType)) {auditOnly=true;auditReason='没有足够选题价值，普通案例、教程或营销内容不作为热点';}
     if(!event.isNewEvent) {auditOnly=true;auditReason='旧闻重述或没有实质新增事实，不作为新热点';}
-    const signal:Signal = { id: existing?.id || hash(key), eventKey: existing?.eventKey || key, title: event.title, summary: event.summary, entity: event.entity, version: event.version, eventType: event.eventType, occurredAt, status, reason, attention: event.attention, attentionReason: event.attentionReason, tags: event.tags, evidence: merged, ruleIds: [...new Set([...(existing?.ruleIds || []), ...event.ruleIds])], firstSeenAt: existing?.firstSeenAt || new Date(now).toISOString(), updatedAt: new Date(now).toISOString(), auditOnly,auditReason,isNewsworthy:event.isNewsworthy,isNewEvent:event.isNewEvent,screeningVersion:QUALITY_VERSION,twitterFilterVersion:TWITTER_FILTER_VERSION };
+    const signal:Signal = { id: existing?.id || hash(key), eventKey: existing?.eventKey || key, title: event.title, summary: event.summary, entity: event.entity, version: event.version, eventType: event.eventType, occurredAt, status, reason, attention: event.attention, attentionReason: event.attentionReason, importance: event.importance, importanceReason: event.importanceReason, tags: event.tags, evidence: merged, ruleIds: [...new Set([...(existing?.ruleIds || []), ...event.ruleIds])], firstSeenAt: new Date(Math.min(existing ? Date.parse(existing.firstSeenAt) : now, ...sources.map(item => Date.parse(item.firstDiscoveredAt || item.fetchedAt)).filter(time => Number.isFinite(time) && time <= now))).toISOString(), updatedAt: new Date(now).toISOString(), auditOnly,auditReason,isNewsworthy:event.isNewsworthy,isNewEvent:event.isNewEvent,screeningVersion:QUALITY_VERSION,twitterFilterVersion:TWITTER_FILTER_VERSION };
     const time=signalTime(signal,now);
-    if(time === null || time < now-FRESHNESS_MS) {signal.auditOnly=true;signal.auditReason=time === null ? '缺少可靠事件或原始发布时间，不进入热点列表' : '超过 5 天，自动退出热点列表';}
+    if((time === null || time < now-FRESHNESS_MS) && (!signal.auditOnly || !signal.auditReason)) {signal.auditOnly=true;signal.auditReason=time === null ? '缺少可靠事件或原始发布时间，不进入热点列表' : '超过 5 天，自动退出热点列表';}
     signals.push(signal);
   }
   return { signals, excludedEvidenceIds:[...new Set(data.excludedEvidenceIds)], issues };
@@ -107,6 +107,7 @@ contentKind=feed 是发布者直接提供的 RSS 材料，区别于搜索摘要�
 ruleIds 仅填写真正相关的监控编号；发布类 keyword 仅在目标实际发生时命中。topic 可命中领域新信息。
 evidenceIds 必须引用提供编号。已存在的相同事件使用 existingEventId；不同版本绝不能合并。无法判断是否相同则 null。
 关注度 0-100 是选题排序分数，不是新闻真实性概率，不编造互动数。
+importance 独立判断紧迫性和影响：urgent=需要尽快行动的重大安全、故障或临近截止变更；high=重大模型/产品发布、广泛影响的变化；medium=有实质影响的常规更新；low=影响较小但对目标仍有价值。importanceReason 给出具体理由，不能因为互动多或蓝标就判断为紧急。
 Twitter 只使用通过四项门槛的纯原创。回复（含官方/原作者）、引用推文和纯转发全部排除；蓝 V 仅用于排序，不构成官方身份或事实核验依据。official=false 的发布者只称账号，不自行称官方账号；对用户的标题、摘要和理由不要提及服务端、内部字段或实现细节。闲聊和无新增事实的推广不生成事件。
 discoveredBy 仅表示发现渠道；同一原文经多个引擎发现仍是一份证据。媒体共同引用同一公告不构成独立佐证。平台页面描述不等于视频字幕或讨论全文。B站仅简介的视频按具体视频主题分别判断，不因作者相同而拼接其他作品；与其他平台合并时须有明确指向该视频的原始链接，否则分别保留事件。
 必须完整覆盖所有输入 evidence 的编号：相关候选归入 events 的 evidenceIds；无关内容放入 excludedEvidenceIds。

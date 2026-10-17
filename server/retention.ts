@@ -12,6 +12,7 @@ export function expireContent(store: Store, now = Date.now()): { candidates: num
       store.put('candidates', item.id, { ...item, quality: { version: QUALITY_VERSION, decision: 'filtered', reason: '超过 5 天，自动排除并停止重试' }, processedHash: item.contentHash }); counts.candidates++;
     }
     for (const signal of store.list<Signal>('events')) {
+      if (signal.auditOnly && signal.auditReason !== '超过 5 天，自动退出热点列表') continue;
       const time = signalTime(signal, now);
       if (time === null || time >= now - FRESHNESS_MS || signal.auditReason === '超过 5 天，自动退出热点列表') continue;
       store.put('events', signal.id, { ...signal, auditOnly: true, auditReason: '超过 5 天，自动退出热点列表' }); counts.events++;

@@ -17,7 +17,7 @@ const date=new Date(now-60000).toISOString();
 const x:Source={id:'twitter',name:'X',kind:'x',url:'https://api.twitterapi.io',enabled:true,official:false};
 const rule:Rule={id:'rule',name:'AI',query:'AI',kind:'topic',enabled:true,notify:false,createdAt:date,baselineAt:date,lastRunAt:null,nextRunAt:date};
 const post=(id='1',extra:Partial<Evidence>={})=>applyQuality(makeEvidence(x,{url:`https://x.com/author/status/${id}`,title:'New model release',text:'The project released version 2 today with new code completion features.',externalId:id,publishedAt:date,original:true,postType:'original',likes:10,reposts:5,views:500,authorFollowers:100,...extra}));
-const data=(ev:Evidence)=>analysisSchema.parse({events:[{title:'New model release',summary:'New version with code completion.',entity:'model',version:'2',eventType:'release',occurredAt:null,isNewsworthy:true,isNewEvent:true,status:'confirmed',reason:'Original post',attention:50,attentionReason:'New feature',tags:[],evidenceIds:[ev.id],ruleIds:[rule.id],existingEventId:null}],excludedEvidenceIds:[]});
+const data=(ev:Evidence)=>analysisSchema.parse({events:[{title:'New model release',summary:'New version with code completion.',entity:'model',version:'2',eventType:'release',occurredAt:null,isNewsworthy:true,isNewEvent:true,status:'confirmed',reason:'Original post',attention:50,attentionReason:'New feature', importance: 'medium', importanceReason: 'Fixture impact',tags:[],evidenceIds:[ev.id],ruleIds:[rule.id],existingEventId:null}],excludedEvidenceIds:[]});
 const signal=(ev=post())=>validateBatch(data(ev),[ev],[rule],[],now).signals[0];
 
 test('5 天边界包含整 120 小时，超过一毫秒排除；未来或未知时间无效',()=>{

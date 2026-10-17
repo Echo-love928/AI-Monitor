@@ -10,6 +10,8 @@ test('API 管理规则、配置、来源和重复触发；拒绝越界/外站请
   const request = (url: string, method = 'GET', body?: unknown, extra: Record<string, string> = {}) => fetch(`${base}${url}`, { method, headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...extra }, body: body ? JSON.stringify(body) : undefined });
   try {
     assert.equal((await request('/health')).status, 200); assert.equal((await request('/rules', 'POST', { name: '' })).status, 400);
+    assert.equal((await request('/dashboard?history=all')).status, 200);
+    assert.equal((await request('/dashboard?history=invalid')).status, 400);
     const response = await request('/rules', 'POST', { name: 'API test', query: 'AI coding', kind: 'keyword', enabled: false, notify: true }); assert.equal(response.status, 201); const rule = await response.json() as Rule;
     assert.equal((await request(`/rules/${rule.id}`, 'PATCH', { enabled: true })).status, 200); assert.equal((await request('/scan', 'POST')).status, 202); assert.equal((await request('/scan', 'POST')).status, 200);
     assert.equal((await request('/settings', 'PATCH', { aiDailyLimit: 0 })).status, 400); assert.equal((await request('/settings', 'PATCH', { recipient: 'test@example.com', model: 'test/model' })).status, 200);

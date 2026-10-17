@@ -71,7 +71,8 @@ export function mergeEvidence(items: Evidence[]): Evidence[] {
     const key = evidenceKey(item); const old = values.get(key);
     const discoveredBy = [...new Set([...(old?.discoveredBy || (old ? [old.sourceId] : [])), ...(item.discoveredBy || [item.sourceId])])];
     const best = !old || Number(item.original) > Number(old.original) || item.original === old.original && item.text.length > old.text.length ? item : old;
-    values.set(key, { ...best, discoveredBy });
+    const discovered = [old?.firstDiscoveredAt, old?.fetchedAt, item.firstDiscoveredAt, item.fetchedAt].filter((value): value is string => !!value && Number.isFinite(Date.parse(value)));
+    values.set(key, { ...best, discoveredBy, ...(discovered.length ? { firstDiscoveredAt: new Date(Math.min(...discovered.map(Date.parse))).toISOString() } : {}) });
   }
   return [...values.values()];
 }

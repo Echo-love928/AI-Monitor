@@ -27,7 +27,7 @@ const post=(i=1)=>item(x,i,{url:`https://x.com/author/status/${i}`,externalId:St
 const video=(i=1)=>item(bili,i,{url:`https://www.bilibili.com/video/BVtest${i}/`,contentKind:'description',author:'Video creator'});
 const status=(i=1)=>item(weibo,i,{url:`https://weibo.com/123/${i}`,contentKind:'post',author:'Post author'});
 const candidate=(ev:Evidence):Candidate=>({...ev,attempts:0,processedHash:null});
-const checked=(ev:Evidence)=>validateBatch(analysisSchema.parse({events:[{title:ev.title,summary:'A new model release with concrete improvements.',entity:'coding-model',version:'1',eventType:'release',occurredAt:null,isNewsworthy:true,isNewEvent:true,status:'confirmed',reason:'Source material',attention:60,attentionReason:'New capabilities',tags:[],evidenceIds:[ev.id],ruleIds:[rule.id],existingEventId:null}],excludedEvidenceIds:[]}),[ev],[rule],[]).signals[0];
+const checked=(ev:Evidence)=>validateBatch(analysisSchema.parse({events:[{title:ev.title,summary:'A new model release with concrete improvements.',entity:'coding-model',version:'1',eventType:'release',occurredAt:null,isNewsworthy:true,isNewEvent:true,status:'confirmed',reason:'Source material',attention:60,attentionReason:'New capabilities', importance: 'medium', importanceReason: 'Fixture impact',tags:[],evidenceIds:[ev.id],ruleIds:[rule.id],existingEventId:null}],excludedEvidenceIds:[]}),[ev],[rule],[]).signals[0];
 
 test('可读网页、微博原帖与 B站简介可独立待核实，保留实际视频链接',()=>{
   for(const ev of [item(),video(),status()]){
@@ -59,13 +59,13 @@ test('同一作者的无关推文不能挂上视频，明确引用视频链接�
   const v=video();const p=post();
   assert.deepEqual(bindVideoEvidence([v]),[v]);assert.deepEqual(bindVideoEvidence([v,p]),[p]);
   assert.equal(bindVideoEvidence([v,{...p,outboundUrls:[v.finalUrl]}]).length,2);
-  const request=analysisSchema.parse({events:[{title:p.title,summary:'A model update.',entity:'model',version:'1',eventType:'release',occurredAt:date,isNewsworthy:true,isNewEvent:true,status:'pending',reason:'Different subject',attention:40,attentionReason:'Update',tags:[],evidenceIds:[p.id,v.id],ruleIds:[rule.id],existingEventId:null}],excludedEvidenceIds:[]});
+  const request=analysisSchema.parse({events:[{title:p.title,summary:'A model update.',entity:'model',version:'1',eventType:'release',occurredAt:date,isNewsworthy:true,isNewEvent:true,status:'pending',reason:'Different subject',attention:40,attentionReason:'Update', importance: 'medium', importanceReason: 'Fixture impact',tags:[],evidenceIds:[p.id,v.id],ruleIds:[rule.id],existingEventId:null}],excludedEvidenceIds:[]});
   const result=validateBatch(request,[p,v],[rule],[]);assert.equal(result.signals[0].evidence.some(ev=>platformOf(ev)==='bilibili'),false);
 });
 
 test('其他监控范围暂未参与分析时，不能把原有视频事件改成未命中而隐藏',()=>{
   const v=video();const prior=checked(v);
-  const request=analysisSchema.parse({events:[{title:v.title,summary:'Previously collected video',entity:prior.entity,version:prior.version,eventType:prior.eventType,occurredAt:date,isNewsworthy:true,isNewEvent:false,status:'rejected',reason:'No match in this run',attention:40,attentionReason:'Video',tags:[],evidenceIds:[v.id],ruleIds:[],existingEventId:prior.id}],excludedEvidenceIds:[]});
+  const request=analysisSchema.parse({events:[{title:v.title,summary:'Previously collected video',entity:prior.entity,version:prior.version,eventType:prior.eventType,occurredAt:date,isNewsworthy:true,isNewEvent:false,status:'rejected',reason:'No match in this run',attention:40,attentionReason:'Video', importance: 'medium', importanceReason: 'Fixture impact',tags:[],evidenceIds:[v.id],ruleIds:[],existingEventId:prior.id}],excludedEvidenceIds:[]});
   const result=validateBatch(request,[v],[{...rule,id:'different'}],[prior]);assert.deepEqual(result.signals[0],prior);assert.equal(defaultSignal(result.signals[0]),true);
 });
 

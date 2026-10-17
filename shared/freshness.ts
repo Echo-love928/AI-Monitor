@@ -30,6 +30,17 @@ export function currentSignal(signal: Signal, now = Date.now()): boolean {
 export function defaultSignal(signal: Signal, now = Date.now()): boolean {
   return currentSignal(signal, now) && (signal.status === 'confirmed' || signal.status === 'pending');
 }
+// Historical browsing restores only expiration, never a quality or fact-check rejection.
+export function historicalSignal(signal: Signal, now = Date.now()): boolean {
+  if (currentSignal(signal, now)) return true;
+  if (signal.auditOnly && signal.auditReason !== '超过 5 天，自动退出热点列表') return false;
+  if (signal.isNewsworthy !== true || signal.isNewEvent !== true || !signal.screeningVersion) return false;
+  const discovered = timestamp(signal.firstSeenAt, now);
+  if (discovered === null) return false;
+  const evidence = signal.evidence.map(item => item.quality?.reason === '超过 5 天，自动排除并停止重试'
+    ? { ...item, quality: { ...item.quality, decision: 'eligible' as const } } : item);
+  return currentSignal({ ...signal, auditOnly: false, evidence }, discovered);
+}
 export function expiredEvidence(item: Evidence, now = Date.now()): boolean {
   const time = timestamp(item.publishedAt, now);
   return time !== null && time < now - FRESHNESS_MS;

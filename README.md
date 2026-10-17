@@ -74,3 +74,5 @@ Agent Skills 按用户要求在网页版可用并验收后开发，当前不包�
 2026-10-16：Twitter 优先与 5 天窗口的当前规则、迁移及验证见 [TWITTER-PRIORITY.md](docs/TWITTER-PRIORITY.md)。
 
 Twitter 数值门槛、蓝 V 权重与每 30 分钟指标回查见 [TWITTER-FILTERS.md](docs/TWITTER-FILTERS.md)。缺失或未达标先隐藏，5 天内在现有预算中回查，达标后重新审核。
+
+2026-10-16 筛选与排序按确认方案更新：支持来源、重要性、监控关键词、事件时间四类筛选，以及热度综合、最新发布、最新发现、重要度四种排序。列表可按事件时间查看近 5 天或全部已保存的合格历史信息，采集与通知仍执行原有近 5 天策略。评分与历史边界见 [FILTERS-SORTING.md](docs/FILTERS-SORTING.md)。
