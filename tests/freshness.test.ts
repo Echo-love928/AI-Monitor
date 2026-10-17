@@ -1,3 +1,4 @@
+import { fixtureAssessment } from './analysis-fixture.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { FRESHNESS_MS, currentSignal, defaultSignal, signalTime, withinWindow } from '../shared/freshness.js';
@@ -17,7 +18,7 @@ const date=new Date(now-60000).toISOString();
 const x:Source={id:'twitter',name:'X',kind:'x',url:'https://api.twitterapi.io',enabled:true,official:false};
 const rule:Rule={id:'rule',name:'AI',query:'AI',kind:'topic',enabled:true,notify:false,createdAt:date,baselineAt:date,lastRunAt:null,nextRunAt:date};
 const post=(id='1',extra:Partial<Evidence>={})=>applyQuality(makeEvidence(x,{url:`https://x.com/author/status/${id}`,title:'New model release',text:'The project released version 2 today with new code completion features.',externalId:id,publishedAt:date,original:true,postType:'original',likes:10,reposts:5,views:500,authorFollowers:100,...extra}));
-const data=(ev:Evidence)=>analysisSchema.parse({events:[{title:'New model release',summary:'New version with code completion.',entity:'model',version:'2',eventType:'release',occurredAt:null,isNewsworthy:true,isNewEvent:true,status:'confirmed',reason:'Original post',attention:50,attentionReason:'New feature', importance: 'medium', importanceReason: 'Fixture impact',tags:[],evidenceIds:[ev.id],ruleIds:[rule.id],existingEventId:null}],excludedEvidenceIds:[]});
+const data=(ev:Evidence)=>analysisSchema.parse({events:[{title:'New model release',summary:'New version with code completion.',entity:'model',version:'2',eventType:'release',occurredAt:null,isNewsworthy:true,isNewEvent:true,status:'confirmed',reason:'Original post',attention:50,attentionReason:'New feature', importance: 'medium', importanceReason: 'Fixture impact',tags:[],evidenceIds:[ev.id],ruleIds:[rule.id],ruleAssessments:[fixtureAssessment(ev,rule)],existingEventId:null}],excludedEvidenceIds:[]});
 const signal=(ev=post())=>validateBatch(data(ev),[ev],[rule],[],now).signals[0];
 
 test('5 天边界包含整 120 小时，超过一毫秒排除；未来或未知时间无效',()=>{
@@ -64,7 +65,7 @@ test('闲置时也过期：接口立即隐藏，清理只标记且不删原文�
   const store=new Store(':memory:');try{
     store.put('state','settings',{...store.settings(),recipient:'test@example.com'});
     const ev=post();const value=signal(ev);const r={...rule,kind:'keyword' as const,notify:true,baselineAt:new Date(now-3600000).toISOString()};
-    const confirmed={...value,status:'confirmed' as const,occurredAt:date};
+    const confirmed={...value,ruleAssessments:value.ruleAssessments!.map(item=>({...item,ruleKind:r.kind,ruleFingerprint:JSON.stringify([r.kind,r.query.toLowerCase()])})),status:'confirmed' as const,occurredAt:date};
     ingest(store,ev);store.put('events',confirmed.id,confirmed);store.put('rules',r.id,r);
     assert.equal(queueNotifications(store,[confirmed],[r],now),1);
     let sent=0;const mailer=new Mailer(store,{verify:async()=>true,sendMail:async()=>{sent++;return{accepted:['test@example.com']};}});
@@ -103,20 +104,34 @@ test('新推文引用的旧原文仍送入审核，防止丢失旧闻时间依�
   }finally{store.close();}
 });
 
-test('单条合并错误隔离，其他事件继续落库，只有出错候选保持待重试',async()=>{
+test('合并指针错误不丢失已核验候选，另存事件且保留原事件和其他结果',async()=>{
   const store=new Store(':memory:');try{
     store.put('rules',rule.id,rule);for(const source of store.list<Source>('sources'))store.remove('sources',source.id);store.put('sources',x.id,x);
     const a=post('a'),b=post('b');ingest(store,a);ingest(store,b);
     const existing={...signal(a),id:'prior-v1',eventKey:'prior-v1',version:'1',screeningVersion:QUALITY_VERSION};store.put('events',existing.id,existing);
     const run=await new Runner(store,new Collector(store,{request:async()=>{throw Error('No network on recheck');}},'',false),{analyze:async evidence=>{
-      const good=data(b).events[0];good.status='rejected';
+      const good=data(b).events[0];good.status='rejected';good.version='3';
       const bad={...data(a).events[0],existingEventId:existing.id};
-      return validateBatch({events:[bad,good],excludedEvidenceIds:[]},evidence,[rule],[existing]);
+      return validateBatch({events:[bad,good],excludedEvidenceIds:[],exclusions:[]},evidence,[rule],[existing]);
     }}).scan('重新核实');
-    assert.equal(run?.analyzed,1);assert.match(run!.message,/隔离/);
+    assert.equal(run?.analyzed,2);
     assert.equal(store.get<Candidate>('candidates',a.id)?.processedHash,null);
     assert.equal(store.get<Candidate>('candidates',b.id)?.processedHash,b.contentHash);
-    assert.equal(store.list<Signal>('events').length,2);
+    assert.equal(store.list<Signal>('events').length,3);
+    assert.equal(store.get<Signal>('events',existing.id)?.version,'1');
+    const recovered=store.list<Signal>('events').find(item=>item.id!==existing.id&&item.evidence.some(ev=>ev.id===a.id))!;
+    assert.equal(currentSignal(recovered),true);assert.equal(recovered.version,'2');assert.deepEqual(recovered.evidence.map(ev=>ev.id),[a.id]);
+  }finally{store.close();}
+});
+
+test('仅完成作者元数据匹配时，未审语义候选保持待审且不消耗重试次数',async()=>{
+  const store=new Store(':memory:');try{
+    store.put('rules',rule.id,rule);for(const source of store.list<Source>('sources'))store.remove('sources',source.id);store.put('sources',x.id,x);
+    const ev=post('deferred');ingest(store,ev);
+    const runner=new Runner(store,new Collector(store,{request:async()=>{throw Error('No network on recheck');}},'',false),{analyze:async evidence=>({signals:[],excludedEvidenceIds:[],deferredEvidenceIds:evidence.map(item=>item.id)})});
+    for(let index=0;index<4;index++)await runner.scan('重新核实');
+    const saved=store.get<Candidate>('candidates',ev.id)!;
+    assert.equal(saved.processedHash,null);assert.equal(saved.attempts,0);assert.equal(dashboard(store).pendingAnalysis,1);
   }finally{store.close();}
 });
 

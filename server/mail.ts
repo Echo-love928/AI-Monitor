@@ -4,7 +4,8 @@ import { config, safeError } from './config.js';
 import { Store } from './db.js';
 import { hash } from './parse.js';
 import { currentSignal } from '../shared/freshness.js';
-export function eligible(signal: Signal, rule: Rule, now=Date.now()): boolean { return currentSignal(signal,now) && rule.enabled && rule.notify && rule.kind === 'keyword' && signal.status === 'confirmed' && signal.ruleIds.includes(rule.id) && !!rule.baselineAt && !!signal.occurredAt && Date.parse(signal.occurredAt) > Date.parse(rule.baselineAt); }
+import { directAssessments, matchesRule } from '../shared/relevance.js';
+export function eligible(signal: Signal, rule: Rule, now=Date.now()): boolean { return currentSignal(signal,now) && rule.enabled && rule.notify && rule.kind === 'keyword' && signal.status === 'confirmed' && matchesRule(signal, rule) && !signal.relevanceRechecked && !!rule.baselineAt && !!signal.occurredAt && Date.parse(signal.occurredAt) > Date.parse(rule.baselineAt); }
 export function queueNotifications(store: Store, signals: Signal[], rules: Rule[], now = Date.now()): number {
   let count = 0;
   store.transaction(() => { for (const signal of signals) for (const rule of rules) { if (!eligible(signal, rule,now)) continue; const id = hash(`${rule.id}:${signal.id}`); if (store.get('mail', id)) continue;
@@ -13,10 +14,11 @@ export function queueNotifications(store: Store, signals: Signal[], rules: Rule[
   } }); return count;
 }
 const escape = (value: string) => value.replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]!));
-export function mailContent(signal: Signal, ruleName = ''): { text: string; html: string } {
+export function mailContent(signal: Signal, ruleName = '', ruleId?:string): { text: string; html: string } {
+  const assessment=directAssessments(signal,ruleId)[0];const summary=assessment?.summary||signal.summary;const connection=assessment?.reason||'';
   const links = signal.evidence.filter(item => item.original).map(item => ({ title: item.title, url: item.finalUrl }));
-  return { text: `${signal.title}\n\n${signal.summary}\n\n命中监控：${ruleName}\n核实依据：${signal.reason}\n发现时间：${signal.firstSeenAt}\n\n${links.map(link => `${link.title}\n${link.url}`).join('\n\n')}`,
-    html: `<h2>${escape(signal.title)}</h2><p>${escape(signal.summary)}</p><p>命中监控：${escape(ruleName)}</p><p><strong>核实依据：</strong>${escape(signal.reason)}</p><p>发现时间：${escape(signal.firstSeenAt)}</p><ul>${links.map(link => `<li><a href="${escape(link.url)}">${escape(link.title)}</a></li>`).join('')}</ul>` };
+  return { text: `${signal.title}\n\n${summary}\n\n命中监控：${ruleName}\n匹配原因：${connection}\n核实依据：${signal.reason}\n发现时间：${signal.firstSeenAt}\n\n${links.map(link => `${link.title}\n${link.url}`).join('\n\n')}`,
+    html: `<h2>${escape(signal.title)}</h2><p>${escape(summary)}</p><p>命中监控：${escape(ruleName)}</p><p><strong>匹配原因：</strong>${escape(connection)}</p><p><strong>核实依据：</strong>${escape(signal.reason)}</p><p>发现时间：${escape(signal.firstSeenAt)}</p><ul>${links.map(link => `<li><a href="${escape(link.url)}">${escape(link.title)}</a></li>`).join('')}</ul>` };
 }
 export interface MailTransport { verify(): Promise<unknown>; sendMail(message: Record<string, unknown>): Promise<{ accepted: unknown[]; rejected?: unknown[] }>; }
 export function mailConfigured(): boolean { return !!(config.smtpHost && config.smtpUser && config.smtpPass && config.smtpFrom); }
@@ -31,7 +33,7 @@ export class Mailer {
       const rule = this.store.get<Rule>('rules', job.ruleId); const signal = this.store.get<Signal>('events', job.eventId);
       if (!rule || !signal || !eligible(signal, rule,now)) { this.store.put('mail', job.id, { ...job, status: 'failed', error: '监控已暂停/删除、事件过期或核验状态改变，取消发送' }); continue; }
       const updated = { ...job, recipient: this.store.settings().recipient, attempts: job.attempts + 1, signal };
-      try { const result = await this.transport.sendMail({ from: config.smtpFrom, to: updated.recipient, subject: `[FirstCue] ${signal.title}`, messageId: updated.messageId, ...mailContent(signal, rule.name) }); if (!result.accepted.length || result.rejected?.length) throw new Error('SMTP 未接受收件人'); this.store.put('mail', job.id, { ...updated, status: 'submitted', submittedAt: new Date(now).toISOString(), error: null }); }
+      try { const result = await this.transport.sendMail({ from: config.smtpFrom, to: updated.recipient, subject: `[FirstCue] ${signal.title}`, messageId: updated.messageId, ...mailContent(signal, rule.name,rule.id) }); if (!result.accepted.length || result.rejected?.length) throw new Error('SMTP 未接受收件人'); this.store.put('mail', job.id, { ...updated, status: 'submitted', submittedAt: new Date(now).toISOString(), error: null }); }
       catch (error) { this.store.put('mail', job.id, { ...updated, status: updated.attempts >= 4 ? 'failed' : 'retry', nextAttemptAt: new Date(now + 60000 * 2 ** updated.attempts).toISOString(), error: safeError(error) }); }
     }
   }

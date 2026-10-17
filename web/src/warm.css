@@ -17,6 +17,21 @@
   --hero-accent: #ad3f18; --hero-line: #ecd2b8; --hero-panel: #fffaf4;
   --grid-color: #bc79391a; --beam-start: #e3a63e; --beam-end: #d2632e; --shadow: 0 5px 20px #4f321309;
 }
+.relevance-summary { margin: 12px 0; padding: 12px 14px; border-left: 3px solid var(--accent); background: var(--accent-soft); color: var(--ink); text-align: left; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.relevance-summary > div { display: grid; gap: 4px; }
+.relevance-summary > div + div { margin-top: 10px; }
+.relevance-label { font-weight: 650; }
+.relevance-details { margin: 24px 0; }
+.relevance-assessment { padding: 16px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; line-height: 1.7; }
+.relevance-assessment p { margin: 8px 0; }
+.relevance-assessment blockquote { margin: 12px 0; padding: 10px 14px; background: var(--soft); border-left: 3px solid var(--accent); }
+.relevance-assessment a { display: inline-block; max-width: 100%; padding: 10px 0; color: var(--accent-hover); }
+.relevance-assessment small { color: var(--muted); }
+.relevance-queue { margin: 16px 0; border: 1px solid var(--line); border-radius: 12px; background: var(--white); padding: 16px; color: var(--ink); }
+.relevance-queue summary { cursor: pointer; min-height: 44px; display: list-item; align-content: center; font-weight: 650; }
+.relevance-queue p { line-height: 1.65; }
+.relevance-queue article { padding: 12px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.relevance-queue a { display: inline-block; padding: 10px 0; color: var(--accent-hover); }
 button, a, input, select, textarea { touch-action: manipulation; }
 button { transition: background .18s, border-color .18s, box-shadow .18s, color .18s; }
 button:disabled { cursor: not-allowed; }

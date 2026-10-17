@@ -10,6 +10,7 @@ import { expireContent } from './retention.js';
 import { TWITTER_FILTER_VERSION } from '../shared/twitter.js';
 import { syncEvidenceMetadata, syncTwitterEvents } from './twitter-policy.js';
 import { normalizeMetadata } from '../shared/engagement.js';
+import { migrateRelevance } from './relevance-migration.js';
 export class Store {
   db: DatabaseSync;
   constructor(filename = path.join(config.dataDir, 'signal.sqlite')) {
@@ -96,6 +97,7 @@ export class Store {
         syncEvidenceMetadata(this);
         this.put('state','engagementMetadataV1',true);
       }
+      migrateRelevance(this);
     });
     expireContent(this);
   }

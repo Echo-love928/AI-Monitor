@@ -1,3 +1,4 @@
+import { fixtureAssessment } from './analysis-fixture.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -63,8 +64,8 @@ test('相同原文不重复占候选名额，候选不足时由其他合格来�
   const selected=selectCandidates(items,30);assert.equal(selected.length,30);assert.equal(selected.filter(item=>item.sourceKind==='x').length,29);
   assert.equal(selectCandidates(items.filter(item=>item.sourceKind==='x'),30).length,30);
 });
-test('Twitter 查询保留目标并中英文匹配发布、更新，不执行泛网页发现',()=>{
-  const query=xQueryFor(rule);assert.match(query,/OpenAI/);assert.match(query,/release OR update OR launch OR 发布 OR 更新/);
+test('Twitter 纯产品查询保留目标，不额外强制发布、更新',()=>{
+  const query=xQueryFor(rule);assert.match(query,/OpenAI/);assert.doesNotMatch(query,/release OR update OR launch OR 发布 OR 更新/);
 });
 
 test('百度移动版读取目标 URL 和纯文本标题，搜狗去除查询导航且解析正文摘要',()=>{
@@ -105,8 +106,8 @@ test('普通原创读取其引用原文，未继承推文官方身份或编造�
   }finally{store.close();}
 });
 test('只有补充回复不能独立确认或出现在事件列表',()=>{
-  const ev=post({postType:'reply',official:true});const data=analysisSchema.parse({events:[{title:'Reply',summary:'Summary',entity:'model',version:'1',eventType:'release',occurredAt:date,isNewsworthy:true,isNewEvent:true,status:'confirmed',reason:'test',attention:20,attentionReason:'test', importance: 'medium', importanceReason: 'Fixture impact',tags:[],evidenceIds:[ev.id],ruleIds:[rule.id],existingEventId:null}],excludedEvidenceIds:[]});
-  const result=validateAnalysis(data,[ev],[rule],[])[0];assert.equal(result.status,'pending');assert.equal(result.auditOnly,true);
+  const ev=post({postType:'reply',official:true});const data=analysisSchema.parse({events:[{title:'Reply',summary:'Summary',entity:'model',version:'1',eventType:'release',occurredAt:date,isNewsworthy:true,isNewEvent:true,status:'confirmed',reason:'test',attention:20,attentionReason:'test', importance: 'medium', importanceReason: 'Fixture impact',tags:[],evidenceIds:[ev.id],ruleIds:[rule.id],ruleAssessments:[fixtureAssessment(ev,rule)],existingEventId:null}],excludedEvidenceIds:[]});
+  const result=validateAnalysis(data,[ev],[rule],[])[0];assert.equal(result.status,'rejected');assert.equal(result.auditOnly,true);
 });
 test('历史重标保留原始记录、未知类型和规则，不删除数据，审计项从主列表移除',()=>{
   const directory=mkdtempSync(path.join(tmpdir(),'quality-migration-'));const filename=path.join(directory,'test.sqlite');

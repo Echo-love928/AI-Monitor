@@ -1,3 +1,4 @@
+import { fixtureAssessment } from './analysis-fixture.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { eventTime, feedSources, heatScore, publishedTime, selectSignals, signalSources, type FeedFilters } from '../shared/feed.js';
@@ -133,12 +134,12 @@ test('重复抓取和正文更新保留首次发现，AI 保存重要性且不�
     assert.equal(saved.firstDiscoveredAt, hoursAgo(1));
     const rule: Rule = { id: 'a', name: 'Coding', query: 'coding release', kind: 'keyword', enabled: true, notify: false, createdAt: hoursAgo(3), baselineAt: hoursAgo(3), nextRunAt: hoursAgo(0), lastRunAt: null };
     const event = { title: 'New release', summary: 'New capability', entity: 'model', version: '1', eventType: 'release', occurredAt: ev.publishedAt, isNewsworthy: true, isNewEvent: true, status: 'confirmed', reason: 'Official source', attention: 10, attentionReason: 'Separate editorial score', importance: 'high', importanceReason: 'Broad impact', tags: [], evidenceIds: [ev.id], ruleIds: ['a'], existingEventId: null };
-    const data = analysisSchema.parse({ events: [event], excludedEvidenceIds: [] });
+    const data = analysisSchema.parse({ events: [{...event,ruleAssessments:[fixtureAssessment(saved,rule)]}], excludedEvidenceIds: [] });
     const result = validateBatch(data, [saved], [rule], [], now).signals[0];
     assert.equal(result.importance, 'high');
     assert.equal(result.firstSeenAt, hoursAgo(1));
-    const prior = { ...result, ruleIds: ['a', 'paused'] };
+    const prior = { ...result, ruleIds: ['a', 'paused'],ruleAssessments:[...result.ruleAssessments!,{...result.ruleAssessments![0],ruleId:'paused'}] };
     const merged = validateBatch(data, [saved], [rule], [prior], now).signals[0];
-    assert.deepEqual(merged.ruleIds, ['a', 'paused']);
+    assert.deepEqual([...merged.ruleIds].sort(), ['a', 'paused']);
   } finally { store.close(); }
 });

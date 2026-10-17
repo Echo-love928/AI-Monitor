@@ -31,7 +31,8 @@ export function linkedUrls(item: Evidence): string[] {
 export function assess(item: Evidence, context: Evidence[] = [], now = Date.now()): Quality {
   const verdict = (decision: Quality['decision'], reason: string): Quality => ({ version: QUALITY_VERSION, decision, reason });
   if(expiredEvidence(item,now)) return verdict('filtered','超过 5 天，自动排除并停止重试');
-  if(routineContent(item.title)) return verdict('filtered','普通客户案例、教程或营销内容不作为热点');
+  // News value depends on the requested scope; an explicitly requested tutorial
+  // or creator upload must reach per-rule review instead of being discarded here.
   if (item.sourceKind !== 'x') {
     const target=new URL(item.finalUrl);
     const redirect=/(^|\.)(sogou|baidu)\.com$/.test(target.hostname) && target.pathname === '/link';
@@ -49,7 +50,7 @@ export function assess(item: Evidence, context: Evidence[] = [], now = Date.now(
   if (item.official) return verdict('eligible','已核验发布者的纯原创，四项指标均达标');
   if (linkedUrls(item).length) return verdict('eligible', '原创包含可追溯链接，须读取原文后核验');
   const text=item.text.replace(/https?:\/\/\S+|@\w+/g,' ').trim();
-  const substantive=text.length >= 24 && /releas|launch|introduc|announc|ship|now available|new (?:model|version|feature)|benchmark|vulnerabilit|acquir|funding|发布|上线|开源|更新|新增|推出|开放|实测|评测|基准|漏洞|收购|融资|版本/i.test(text);
+  const substantive=text.length >= 24 && /releas|launch|introduc|announc|ship|now available|new (?:model|version|feature)|benchmark|controlled test|integrat|measur(?:ed|ing)|unsupported.operation|latency|security test|executable code|regression|outage|unavailable|pricing|price reduction|vulnerabilit|acquir|funding|发布|上线|开源|更新|新增|推出|开放|实测|评测|基准|漏洞|收购|融资|版本|降价|故障|回归|中断/i.test(text);
   return substantive ? verdict('eligible','有实质变化描述的原创线索，可无外链；须审核新颖性并标明待核实') : verdict('filtered','缺少具体事件或新增事实，不把闲聊当热点');
 }
 

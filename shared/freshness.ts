@@ -1,6 +1,7 @@
 import type { Evidence, Signal } from './types.js';
 import { qualifiedTwitter, TWITTER_FILTER_VERSION } from './twitter.js';
 import { nonTwitterDiscovery } from './discovery.js';
+import { directAssessments } from './relevance.js';
 
 export const FRESHNESS_DAYS = 5;
 export const FRESHNESS_HOURS = FRESHNESS_DAYS * 24;
@@ -22,6 +23,7 @@ export function signalTime(signal: Signal, now = Date.now()): number | null {
   return dates.length ? Math.min(...dates) : null;
 }
 export function currentSignal(signal: Signal, now = Date.now()): boolean {
+  if(signal.relevanceVersion !== undefined && !directAssessments(signal).length)return false;
   const time = signalTime(signal, now);
   const other=signal.evidence.some(item=>nonTwitterDiscovery(item,now));
   const discovery=other || signal.twitterFilterVersion === TWITTER_FILTER_VERSION && signal.evidence.some(qualifiedTwitter);

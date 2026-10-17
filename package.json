@@ -14,7 +14,11 @@
     "build": "npm run check && vite build && tsc -p tsconfig.server.json",
     "start": "node scripts/start.mjs",
     "test": "tsx --test tests/*.test.ts",
-    "smoke": "tsx scripts/smoke.ts"
+    "smoke": "tsx scripts/smoke.ts",
+    "eval:relevance": "tsx scripts/evaluate-relevance.ts",
+    "eval:prepare": "tsx scripts/prepare-relevance-eval.ts",
+    "eval:calibrate": "tsx scripts/calibrate-relevance-grader.ts",
+    "relevance:history": "tsx scripts/review-relevance-history.ts"
   },
   "dependencies": {
     "cheerio": "1.2.0",

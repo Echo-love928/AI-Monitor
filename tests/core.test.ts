@@ -1,3 +1,4 @@
+import { fixtureAssessment } from './analysis-fixture.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Store } from '../server/db.js';
@@ -12,7 +13,7 @@ const source: Source = { id: 'test-feed', name: 'Test', kind: 'rss', url: 'https
 const now = Date.now(); const date = new Date(now - 60000).toISOString();
 const evidence = (): Evidence => makeEvidence(source, { url: 'https://openai.com/news/test-release', title: 'Test release', text: 'A test-only release announcement with enough original text to exercise evidence validation. This fixture never appears in the app.', publishedAt: date, original: true, official: true });
 const rule = (): Rule => ({ id: 'rule', name: 'Test release', query: 'test release', kind: 'keyword', enabled: true, notify: true, createdAt: new Date(now - 3600000).toISOString(), baselineAt: new Date(now - 3600000).toISOString(), nextRunAt: new Date(now - 1000).toISOString(), lastRunAt: null });
-const analysis = (ev: Evidence) => analysisSchema.parse({ events: [{ title: 'Test release', summary: 'Fixture', entity: 'test-model', version: '1', eventType: 'release', occurredAt: date, isNewsworthy:true, isNewEvent:true, status: 'confirmed', reason: 'Fixture original', attention: 80, attentionReason: 'Fixture', importance: 'medium', importanceReason: 'Fixture impact', tags: ['test'], evidenceIds: [ev.id], ruleIds: ['rule'], existingEventId: null }], excludedEvidenceIds: [] });
+const analysis = (ev: Evidence) => analysisSchema.parse({ events: [{ title: 'Test release', summary: 'Fixture', entity: 'test-model', version: '1', eventType: 'release', occurredAt: date, isNewsworthy:true, isNewEvent:true, status: 'confirmed', reason: 'Fixture original', attention: 80, attentionReason: 'Fixture', importance: 'medium', importanceReason: 'Fixture impact', tags: ['test'], evidenceIds: [ev.id], ruleIds: ['rule'], ruleAssessments:[fixtureAssessment(ev,rule())], existingEventId: null }], excludedEvidenceIds: [] });
 const signal = (): Signal => validateAnalysis(analysis(evidence()), [evidence()], [rule()], [])[0];
 function doc(text: string, url = source.url): HttpDocument { return { status: 200, headers: {}, text, url }; }
 test('公共地址检查拒绝私网、环回、IPv6 映射、凭据和非标准端口', () => {
@@ -47,14 +48,14 @@ test('文章拒绝访问不抹掉已取得的发布源摘要，保留材料类�
 });
 test('模型不能虚构证据；仿冒/摘要与无依据日期不能变为已核实', () => {
   const ev = evidence(); assert.equal(validateAnalysis(analysis(ev), [ev], [rule()], [])[0].status, 'confirmed');
-  assert.equal(validateAnalysis(analysis(ev), [{ ...ev, official: false, original: false }], [rule()], [])[0].status, 'pending');
+  assert.equal(validateAnalysis(analysis(ev), [{ ...ev, official: false, original: false }], [rule()], [])[0].status, 'rejected');
   const noDate = analysis(ev); noDate.events[0].occurredAt = null; assert.equal(validateAnalysis(noDate, [ev], [rule()], [])[0].status, 'pending');
   const invented = analysis(ev); invented.events[0].evidenceIds = ['invented']; assert.throws(() => validateAnalysis(invented, [ev], [rule()], []));
   const unrelated = analysis(ev); unrelated.events[0].ruleIds = []; assert.equal(validateAnalysis(unrelated, [ev], [rule()], [])[0].status, 'rejected');
 });
 test('供应商在 HTTP 200 中返回错误时仍拒绝分析，不产生事件', async () => {
   const store = new Store(':memory:'); try {
-    store.put('state', 'settings', { ...store.settings(), model: 'test/model' }); store.put('state', 'modelChecked', { model: 'test/model', at: Date.now(), reasoningEffort: null });
+    store.put('state', 'settings', { ...store.settings(), model: 'test/model' }); store.put('state', 'modelChecked', { model: 'test/model', at: Date.now(), reasoningEffort: null,reasoningPolicyVersion:3 });
     const http: HttpClient = { request: async () => doc(JSON.stringify({ error: { message: 'upstream timed out' } })) };
     await assert.rejects(new Analyzer(store, http, 'test-only-key').analyze([evidence()], [rule()], []), /upstream timed out/);
     assert.equal(store.list('events').length, 0);
@@ -63,12 +64,12 @@ test('供应商在 HTTP 200 中返回错误时仍拒绝分析，不产生事件'
 test('无关候选必须明确排除，不能遗漏或同时归入事件', () => {
   const ev = evidence(); const other = { ...ev, id: 'unrelated' }; const data = analysis(ev);
   assert.throws(() => validateAnalysis(data, [ev, other], [rule()], []), /完整处理/);
-  data.excludedEvidenceIds = [other.id]; assert.equal(validateAnalysis(data, [ev, other], [rule()], []).length, 1);
+  data.excludedEvidenceIds = [other.id]; data.exclusions=[{evidenceId:other.id,category:'unrelated',reason:'Unrelated fixture'}]; assert.equal(validateAnalysis(data, [ev, other], [rule()], []).length, 1);
   data.excludedEvidenceIds = [ev.id]; assert.throws(() => validateAnalysis(data, [ev], [rule()], []), /冲突/);
 });
 test('输出截断不产生事件，但仍记录供应商返回的 token 用量', async () => {
   const store = new Store(':memory:'); try {
-    store.put('state', 'settings', { ...store.settings(), model: 'test/model' }); store.put('state', 'modelChecked', { model: 'test/model', at: Date.now(), reasoningEffort: null });
+    store.put('state', 'settings', { ...store.settings(), model: 'test/model' }); store.put('state', 'modelChecked', { model: 'test/model', at: Date.now(), reasoningEffort: null,reasoningPolicyVersion:3 });
     const http: HttpClient = { request: async () => doc(JSON.stringify({ choices: [{ message: { content: null }, finish_reason: 'length' }], usage: { total_tokens: 123 } })) };
     await assert.rejects(new Analyzer(store, http, 'test-only-key').analyze([evidence()], [rule()], []), /截断/);
     assert.equal(store.usage().aiTokens, 123); assert.equal(store.list('events').length, 0);
@@ -87,10 +88,10 @@ test('分批审核保留已成功批次，后续批次失败不重做或丢掉�
   try {
     store.put('rules', 'rule', rule()); store.put('sources',source.id,source);
     for(let i=0;i<30;i++) ingest(store, { ...evidence(), id: `batch-${i}`, url:`https://openai.com/news/batch-${i}`, finalUrl:`https://openai.com/news/batch-${i}`, text: 'Original content '.repeat(60) });
-    const runner = new Runner(store, new Collector(store, { request: async () => { throw new Error('unused'); } }, '', false), { analyze: async batch => { calls++; assert.equal(batch.length, 15); if(calls === 2) throw new Error('second batch offline'); return { signals: [], excludedEvidenceIds: batch.map(item=>item.id) }; } });
-    const run = await runner.scan('重新核实'); assert.equal(run?.status, 'partial'); assert.equal(run?.analyzed, 15); assert.equal(calls, 2);
-    const saved=store.list<Candidate>('candidates'); assert.equal(saved.filter(item=>item.processedHash === item.contentHash).length, 15);
-    assert.equal(saved.filter(item=>!item.processedHash && item.attempts === 1).length, 15);
+    const runner = new Runner(store, new Collector(store, { request: async () => { throw new Error('unused'); } }, '', false), { analyze: async batch => { calls++; assert.equal(batch.length, 8); if(calls === 2) throw new Error('second batch offline'); return { signals: [], excludedEvidenceIds: batch.map(item=>item.id) }; } });
+    const run = await runner.scan('重新核实'); assert.equal(run?.status, 'partial'); assert.equal(run?.analyzed, 8); assert.equal(calls, 2);
+    const saved=store.list<Candidate>('candidates'); assert.equal(saved.filter(item=>item.processedHash === item.contentHash).length, 8);
+    assert.equal(saved.filter(item=>!item.processedHash && item.attempts === 1).length, 8);
   } finally {store.close();}
 });
 test('相同版本稳定合并，不同版本不能被 AI 强制合并', () => {
@@ -101,7 +102,7 @@ test('相同版本稳定合并，不同版本不能被 AI 强制合并', () => {
 });
 test('合并同一事件时保留已取得的原始证据，后来的摘要不会抹掉确认依据', () => {
   const old = signal(); const snippet = { ...evidence(), id: 'new-snippet', original: false, official: false };
-  const next = analysis(snippet); next.events[0].existingEventId = old.id;
+  const next = analysis(snippet); next.events[0].existingEventId = old.id; next.events[0].ruleAssessments=[fixtureAssessment(old.evidence[0],rule())];
   const merged = validateAnalysis(next, [snippet], [rule()], [old])[0];
   assert.equal(merged.status, 'confirmed'); assert.equal(merged.evidence.length, 1); assert.equal(merged.evidence[0].original,true);
   next.events[0].status = 'pending'; assert.equal(validateAnalysis(next, [snippet], [rule()], [old])[0].status, 'pending');

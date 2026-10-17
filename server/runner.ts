@@ -3,13 +3,15 @@ import type { Account, Candidate, Evidence, Rule, Run, Signal, Source } from '..
 import { Store } from './db.js';
 import { INTERVAL_MS, safeError } from './config.js';
 import { Collector, ingest } from './sources.js';
-import { Analyzer, type AnalysisResult } from './ai.js';
+import { Analyzer,creatorVideoFallback, type AnalysisResult } from './ai.js';
 import { queueNotifications } from './mail.js';
 import { applyQuality, discoveryCandidate, evidenceKey, linkedUrls, mergeEvidence, selectCandidates } from './quality.js';
 import { nonTwitterDiscovery, platformOf } from '../shared/discovery.js';
 import { discoverySearches, xQueryFor } from './search.js';
 import { currentSignal, expiredEvidence, FRESHNESS_MS } from '../shared/freshness.js';
 import { expireContent } from './retention.js';
+import { analysisFingerprint, needsAnalysis } from '../shared/relevance.js';
+import { creatorVideoMatches,creatorVideoRule,withdrawExcludedMatches } from './relevance.js';
 import { syncEvidenceMetadata } from './twitter-policy.js';
 
 export interface AnalysisService { analyze(evidence: Evidence[], rules: Rule[], prior: Signal[]): Promise<AnalysisResult>; }
@@ -63,7 +65,7 @@ export class Runner {
           }
           if (source.kind === 'x') {
             for (const account of this.store.list<Account>('accounts').filter(item => item.enabled).slice(0, 10)) await collect(source, async () => this.collector.x(source, '', since, await this.collector.resolveAccount(account)));
-            for (const query of [...new Set(rules.map(xQueryFor))]) {
+            for (const query of [...new Set(rules.map(rule=>xQueryFor(rule, Math.floor((this.store.get<number>('state','discoveryRotation')||0)/3))))]) {
               const before=run.sources.filter(row=>row.sourceId===source.id && row.status==='failed').length;
               await collect(source, () => this.collector.x(source, query, since));
               if(run.sources.filter(row=>row.sourceId===source.id && row.status==='failed').length>before)break;
@@ -81,11 +83,13 @@ export class Runner {
           const engine=engines[discoveryEngine%engines.length];let found:Evidence[]=[];
           if(job.source.format==='bilibili' && !blockedPlatforms.has(job.source.id)) {
             webRequests++;found=await collect(job.source,()=>this.collector.videoSearch(job.source,job.query),'discovery',job.query);
+            if(run.sources.at(-1))run.sources.at(-1)!.ruleId=job.ruleId;
             if(run.sources.at(-1)?.status==='failed')blockedPlatforms.add(job.source.id);
           } else if(engine) {
             webRequests++;discoveryEngine++;
             const query=job.source.format==='bilibili'?'site:bilibili.com/video '+job.query+' '+new Date(started).toISOString().slice(0,7):job.query;
             found=await collect(job.source.format?job.source:engine,()=>job.source.format?this.collector.platformSearch(job.source,engine,query):this.collector.web(engine,query),'discovery',query);
+            if(run.sources.at(-1))run.sources.at(-1)!.ruleId=job.ruleId;
             if(run.sources.at(-1)?.status==='failed')failedEngines.add(engine.id);
           } else {run.sources.push({sourceId:job.source.id,name:job.source.name,kind:job.source.kind,status:'failed',count:0,message:'没有可用的公开搜索引擎，保留后续检查',purpose:'discovery',query:job.query});}
           for(const item of mergeEvidence(found).filter(item=>item.quality?.decision!=='filtered').slice(0,3)) {
@@ -116,10 +120,35 @@ export class Runner {
       syncEvidenceMetadata(this.store);
       const enabledSources = new Set(sources.filter(source => source.enabled).map(source => source.id));
       const disabledPlatforms=new Set(sources.filter(source=>!source.enabled && ['bilibili','weibo'].includes(source.format||'')).map(source=>source.id));
-      const pending = classified.filter(item => !disabledPlatforms.has(platformOf(item)) && enabledSources.has(item.sourceId) && discoveryCandidate(item,started) && item.processedHash !== item.contentHash && item.attempts < 3);
+      const reviewRules=this.store.list<Rule>('rules').filter(rule=>rule.enabled);
+      const fingerprint=analysisFingerprint(reviewRules);
+      for(const item of classified) if(item.analysisFingerprint!==fingerprint)item.attempts=0;
+      const pending = classified.filter(item => !disabledPlatforms.has(platformOf(item)) && enabledSources.has(item.sourceId) && discoveryCandidate(item,started) && needsAnalysis(item,reviewRules) && item.attempts < 3);
       const selected = selectCandidates(pending, settings.candidatePerRunLimit);
 
-      if (selected.length && this.analyzer instanceof Analyzer && (!this.analyzer.apiKey || !settings.model)) run.message = 'AI 尚未配置：已保存候选内容，配置 Key 与模型后点击重新核实';
+      const modelUnavailable=this.analyzer instanceof Analyzer&&(!this.analyzer.apiKey||!settings.model);
+      const quotaExhausted=this.analyzer instanceof Analyzer&&(this.store.usage().aiRequests||0)>=settings.aiDailyLimit;
+      if(selected.length&&(modelUnavailable||quotaExhausted)){
+        // Metadata matches must not depend on the position of a video in paid AI batches.
+        const works=pending.filter(item=>reviewRules.some(rule=>creatorVideoMatches(item,rule,started))).slice(0,settings.candidatePerRunLimit);
+        for(let index=0;index<works.length;index+=8){
+          const batch=works.slice(index,index+8),prior=this.store.list<Signal>('events');
+          const result=creatorVideoFallback(batch,reviewRules,prior,started);
+          if(!result)continue;
+          this.store.transaction(()=>{
+            for(const signal of result.signals){
+              if(!this.store.get('events',signal.id)&&currentSignal(signal,started))run.newSignals++;
+              this.store.put('events',signal.id,signal);
+            }
+            for(const item of batch){
+              const saved=this.store.get<Candidate>('candidates',item.id)!;
+              this.store.put('candidates',item.id,{...saved,processedHash:reviewRules.every(creatorVideoRule)?item.contentHash:null,analysisFingerprint:fingerprint,attempts:0});
+            }
+          });
+          if(reviewRules.every(creatorVideoRule))run.analyzed+=batch.length;
+        }
+        run.message=modelUnavailable?'AI 尚未配置：已保存语义候选；已按作者、具体视频和发布时间收录关注作者的新作品':'OpenRouter 每日调用上限已到；语义候选保留待审，关注作者的新视频按发布元数据独立收录';
+      }
       else if (selected.length) {
         const prepared: Evidence[][] = []; let evidenceCount = 0;
         const reservedOther=selected.filter(item=>item.sourceKind!=='x').length;
@@ -155,36 +184,39 @@ export class Runner {
             }
           }
           group.push(...classified.filter(ev => ev.quality?.decision === 'context' && (ev.inReplyToId === value.externalId || ev.conversationId === value.externalId)));
-          group = mergeEvidence(group).slice(0,15);
+          group = mergeEvidence(group).slice(0,8);
           group=group.slice(0,Math.min(settings.candidatePerRunLimit-evidenceCount,materialLimits[lane]-materialCounts[lane]));
           evidenceCount += group.length;materialCounts[lane]+=group.length; prepared.push(group);
         }
         // Keep each tweet with its linked originals in the same AI batch.
         const batches: Evidence[][] = [];
-        for (const group of prepared) { const last = batches.at(-1); if (!last || mergeEvidence([...last, ...group]).length > 15) batches.push(group); else batches[batches.length - 1] = mergeEvidence([...last,...group]); }
+        for (const group of prepared) { const last = batches.at(-1); if (!last || mergeEvidence([...last, ...group]).length > 8) batches.push(group); else batches[batches.length - 1] = mergeEvidence([...last,...group]); }
         for (const batch of batches) {
           try {
             const prior = this.store.list<Signal>('events');
             const analysisRules=this.store.list<Rule>('rules').filter(rule=>rule.enabled);
-            const { signals, excludedEvidenceIds,issues=[] } = await this.analyzer.analyze(batch, analysisRules, prior);
-            const unresolved=new Set(issues.flatMap(issue=>issue.evidenceIds));
+            const { signals, excludedEvidenceIds,exclusions=[],issues=[],deferredEvidenceIds=[] } = await this.analyzer.analyze(batch, analysisRules, prior);
+            const deferred=new Set(deferredEvidenceIds);
+            const withdrawn=withdrawExcludedMatches(prior,exclusions,batch,analysisRules);
+            const unresolved=new Set([...deferred,...issues.flatMap(issue=>issue.evidenceIds),...exclusions.filter(item=>item.category==='insufficient').map(item=>item.evidenceId)]);
             if(issues.length)run.message=[run.message,...new Set(issues.map(issue=>issue.message))].filter(Boolean).join('；');
             const aliases=new Map<string,Candidate[]>();
             for(const item of this.store.list<Candidate>('candidates')) {const key=evidenceKey(item);const bucket=aliases.get(key)||[];bucket.push(item);aliases.set(key,bucket);}
             this.store.transaction(() => {
+              for(const signal of withdrawn)if(!signals.some(item=>item.id===signal.id)) {this.store.put('relevance-withdrawn-audit',signal.id,this.store.get('events',signal.id));this.store.put('events',signal.id,signal);}
               for (const signal of signals) { if (!this.store.get('events', signal.id) && currentSignal(signal)) run.newSignals++; this.store.put('events', signal.id, signal); }
               for (const item of batch) {
                 const related = signals.filter(signal => signal.evidence.some(ev => ev.id === item.id));
                 const done = expiredEvidence(item) || !unresolved.has(item.id) && (excludedEvidenceIds.includes(item.id) || !!related.length && related.every(signal => signal.status !== 'pending' || signal.auditOnly));
                 const old = this.store.get<Candidate>('candidates', item.id); if (!old) continue;
-                this.store.put('candidates', item.id, { ...old, processedHash: done ? item.contentHash : null, attempts: old.attempts + 1 });
-                for (const alias of (aliases.get(evidenceKey(item)) || []).filter(ev => ev.id !== item.id && ev.contentHash === item.contentHash)) this.store.put('candidates', alias.id, { ...alias, processedHash: done ? alias.contentHash : null, attempts: old.attempts + 1 });
+                this.store.put('candidates', item.id, { ...old, processedHash: done ? item.contentHash : null, analysisFingerprint:fingerprint, relevanceExclusion:exclusions.find(value=>value.evidenceId===item.id), attempts: (old.analysisFingerprint===fingerprint?old.attempts:0) + (deferred.has(item.id)?0:1) });
+                for (const alias of (aliases.get(evidenceKey(item)) || []).filter(ev => ev.id !== item.id && ev.contentHash === item.contentHash)) this.store.put('candidates', alias.id, { ...alias, processedHash: done ? alias.contentHash : null, analysisFingerprint:fingerprint, relevanceExclusion:exclusions.find(value=>value.evidenceId===item.id), attempts: (old.analysisFingerprint===fingerprint?old.attempts:0) + (deferred.has(item.id)?0:1) });
               }
             });
             run.analyzed += batch.filter(item=>!unresolved.has(item.id)).length; this.store.put('runs', run.id, run);
           } catch (error) {
             run.message = safeError(error);
-            for (const item of batch) { const old = this.store.get<Candidate>('candidates', item.id); if (old) this.store.put('candidates', item.id, { ...old, attempts: old.attempts + 1 }); }
+            for (const item of batch) { const old = this.store.get<Candidate>('candidates', item.id); if (old) this.store.put('candidates', item.id, { ...old, analysisFingerprint:fingerprint, attempts: (old.analysisFingerprint===fingerprint?old.attempts:0) + 1 }); }
             break;
           }
         }

@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "confirmedAt": "2026-10-17",
+  "note": "Authority is the existing human answers; this file resolves grader disagreements and never changes production classifications.",
+  "cases": [
+    {
+      "id": "synthetic-17",
+      "level": "weak",
+      "inputHash": "4e73d58d30fbc6ad0c7ab49e722af54fdd55524b061b8cd3981cbe560cd5d71d",
+      "authority": "user-confirmed-policy",
+      "reason": "用户已确认：已取得的评测介绍没有结果或具体发现，按弱相关过滤。"
+    },
+    {
+      "id": "synthetic-28",
+      "level": "weak",
+      "inputHash": "b422d72d7be507b2205f21d0ea36268576763fbd0e4ba27fdbc621246a7a3f1d",
+      "authority": "user-confirmed-policy",
+      "reason": "用户已确认：声称另处公布了评测结果，但已取得内容没有结果或具体发现，按弱相关过滤。"
+    },
+    {
+      "id": "synthetic-47",
+      "level": "weak",
+      "inputHash": "bca6e55da36d01ff56f0026b779b51fd3ba6cffa700d3b34500ba5e8d7736c33",
+      "authority": "user-confirmed-policy",
+      "reason": "用户已确认：编程 Agent 基准只介绍评测和结果另行发布，没有已取得的结果，按弱相关过滤。"
+    },
+    {
+      "id": "real-1-2",
+      "level": "direct",
+      "inputHash": "2d385352ad543d410a3766c2b58a93dea335c9631b7ef633472c3e4ae9a876ac",
+      "authority": "user-confirmed-policy",
+      "reason": "用户已确认：Claude Code/Codex 安装开源 Skill 自动建站并说明步骤，直接相关，热点价值另筛。"
+    }
+  ]
+}

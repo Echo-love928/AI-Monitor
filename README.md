@@ -69,6 +69,8 @@ Google / Hugging Face 等域名是否可访问取决于本机网络；失败有�
 
 Agent Skills 按用户要求在网页版可用并验收后开发，当前不包含技能包。
 
+2026-10-17：热点按每个监控独立核对直接关联、原文引用及型号版本；弱相关过滤，相关性证据不足单列待审。摘要、匹配原因和事实核实分别展示，查询扩展保留目标边界。自动语义评估、验收门槛和历史重审方式见 [相关性审核](docs/RELEVANCE.md)。
+
 2026-10-15 信息源可靠性改造见 [实施与验证记录](docs/SOURCE-QUALITY.md)。历史记录保留，低质量事件仅进入审计；本地 `GET /api/audit` 可查看过滤项。历史重标前的原事件另存于数据库 `event-audit`，联调前备份在 `reports/backups`，均不提交 Git。
 
 2026-10-16：Twitter 优先与 5 天窗口的当前规则、迁移及验证见 [TWITTER-PRIORITY.md](docs/TWITTER-PRIORITY.md)。

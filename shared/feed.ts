@@ -2,6 +2,7 @@ import type { Evidence, Importance, Signal, Source } from './types.js';
 import { platformOf } from './discovery.js';
 import { FRESHNESS_HOURS, historicalSignal, timestamp } from './freshness.js';
 import { interactionScore } from './engagement.js';
+import { directAssessments } from './relevance.js';
 
 export const importanceLabels: Record<Importance, string> = { urgent: '紧急', high: '高', medium: '中', low: '低' };
 export const importanceRanks: Record<Importance, number> = { urgent: 4, high: 3, medium: 2, low: 1 };
@@ -9,6 +10,7 @@ export const timeRanges = { '1h': '最近 1 小时', '6h': '最近 6 小时', '2
 export const sortLabels = { heat: '热度综合', published: '最新发布', discovered: '最新发现', importance: '重要度' };
 export type FeedSort = keyof typeof sortLabels;
 export type TimeRange = keyof typeof timeRanges;
+export const DEFAULT_TIME_RANGE:TimeRange='5d';
 export interface FeedFilters {
   source: string;
   importance: Importance | 'all';
@@ -68,7 +70,7 @@ export function selectSignals(signals: Signal[], filters: FeedFilters, now = Dat
       && (filters.status === 'all' || item.status === filters.status)
       && (filters.source === 'all' || signalSources(item).includes(filters.source))
       && (filters.importance === 'all' || item.importance === filters.importance)
-      && (filters.keyword === 'all' || item.ruleIds.includes(filters.keyword))
+      && (filters.keyword === 'all' || (item.relevanceVersion === undefined ? item.ruleIds.includes(filters.keyword) : directAssessments(item,filters.keyword).length>0))
       && occurred !== null && occurred <= now && occurred >= now - rangeHours[filters.timeRange] * 3600000
       && (!search || `${item.title} ${item.summary} ${item.tags.join(' ')}`.toLowerCase().includes(search));
   });
